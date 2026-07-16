@@ -80,6 +80,7 @@ esptool --chip esp32c3 --port COM3 --baud 921600 write_flash 0x0 x3_stock_firmwa
 - [x] フェーズ2: ホーム画面とフォルダ画面
 - [x] フェーズ2.5: SVGアイコン(Material Symbols)のオフライン変換とプレースホルダー差し替え
 - [x] フェーズ2.6: ステータスバーへのバッテリーアイコン表示（残量3段階、充電中は保留）
+- [x] フェーズ2.7: BQ27220からの実残量取得（kode_BQ27220ライブラリ導入）
 - [ ] フェーズ3: TXT読書画面と基本の読書中メニュー
 - [ ] フェーズ4: 設定画面
 - [ ] フェーズ5: フォントシステム (SDカードからのカスタムフォント読み込み、CJK対応)
@@ -122,15 +123,30 @@ python scripts/convert_icons.py
 
 `StatusBar::setBatteryPercent(int)`で残量(0-100)に応じてアイコン
 (`battery_full`/`battery_half`/`battery_low`、閾値60%・20%)を出し分けている。
+
+X3実機のBQ27220(I2C 0x55)からの実残量取得には、SDKの`BatteryMonitor`(X4の
+ADC分圧方式専用で使えない、下記注意点参照)ではなく、外部ライブラリ
+[kode_BQ27220](https://github.com/kodediy/kode_BQ27220)(Apache-2.0)を
+`core/BatteryService.h`でラップして使っている。`main.cpp`が起動時と30秒おきに
+残量を読み直し、値が変化したときだけ両画面のStatusBarへ反映して部分更新する。
+
+実機での実測値(USB接続中): 4359mV, 99%。妥当な範囲の値が取れることを確認済み。
+
 充電中アイコン(`battery_charging`)は変換パイプラインには追加済みだが、UIロジックでは
-未使用。SDKの`BatteryMonitor`はX4のADC分圧方式専用で充電フラグ取得APIも無いため
-(下記注意点参照)、X3(BQ27220 I2C)からの実残量取得・充電中判定は未実装で、
-現状は`87`のダミー値を渡しているだけ。実データ連携はBQ27220用の自作ドライバが
-別途必要になったタイミングで行う。
+未使用のまま保留している。kode_BQ27220のヘッダには「レジスタマップは類似の
+TI fuel gauge(bq27441等)からの推定値で、BQ27220向けに完全な検証はされていない」
+という作者コメントがあり、`readBatteryStatus()`で生のBatteryStatus()レジスタ値は
+取得できる(`BatteryService::readRawBatteryStatus()`)ものの、DSGビット(放電中フラグ、
+一般的なTI fuel gaugeではbit0)の意味が正しいか、充電中と非充電で値が変化するかを
+X3実機のポゴピン等USB以外の充電手段が無く検証できなかったため。将来検証できる
+環境が整ったら、`main.cpp`のログ出力(`battery raw BatteryStatus=0x...`)を手がかりに
+ビット位置を確認し、`battery_charging`アイコンの出し分けを追加する。
 
 ### 注意点
 
-- SDKの`BatteryMonitor`はX4のADC分圧方式用。X3はBQ27220 (I2C)なので自作ドライバが必要
+- SDKの`BatteryMonitor`はX4のADC分圧方式用。X3はBQ27220 (I2C)なので使えない。
+  実残量取得には`lib_deps`に追加した外部ライブラリ`kode_BQ27220`を使う
+  (詳細は上記「バッテリー表示について」を参照)
 - E-inkの更新は`FULL_REFRESH`(高品質・遅い)と`FAST_REFRESH`(部分更新・速い)を使い分ける
 - 大きなファイルはRAMに全展開せず、SDカード上でストリーム処理する
 - **画面の向き**: E-inkパネルはネイティブでは792x528(横長)のフレームバッファしか

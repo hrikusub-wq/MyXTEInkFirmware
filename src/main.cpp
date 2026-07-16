@@ -19,6 +19,7 @@
 #include <EInkDisplay.h>
 #include <InputManager.h>
 
+#include "core/BatteryService.h"
 #include "core/FileBrowserService.h"
 #include "gfx/MiniFontImpl.h"
 #include "screens/FolderScreen.h"
@@ -36,6 +37,11 @@ constexpr int8_t EPD_BUSY = 6;
 EInkDisplay display(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_RST, EPD_BUSY);
 InputManager input;
 FileBrowserService fileBrowser;
+BatteryService battery;
+
+int lastKnownBatteryPercent = -1;
+unsigned long lastBatteryCheckMs = 0;
+constexpr unsigned long kBatteryCheckIntervalMs = 30000;
 
 // X3の実機は縦持ちで使う機器だが、E-inkパネルはネイティブでは792x528(横長)の
 // フレームバッファしか持たない。UI層は常にこの528x792(縦長)の論理サイズで描画し、
@@ -67,6 +73,14 @@ void renderAndRefresh(EInkDisplay::RefreshMode mode) {
   display.displayBuffer(mode);
 }
 
+// 両画面のStatusBarに残量を反映する(画面切り替え時にどちらも最新値であるように)。
+void applyBatteryPercent(int percent) {
+  if (percent < 0) return;
+  lastKnownBatteryPercent = percent;
+  homeScreen.setBatteryPercent(percent);
+  folderScreen.setBatteryPercent(percent);
+}
+
 }  // namespace
 
 void setup() {
@@ -87,6 +101,25 @@ void setup() {
     Serial.println("[X3FW] SD card ready");
   } else {
     Serial.println("[X3FW] SD card not detected (folder screen will show empty)");
+  }
+
+  if (battery.begin()) {
+    Serial.println("[X3FW] battery gauge (BQ27220) ready");
+    const int percent = battery.readPercent();
+    if (percent >= 0) {
+      applyBatteryPercent(percent);
+      Serial.printf("[X3FW] battery: %d%% (%dmV)\n", percent, battery.readMillivolts());
+    } else {
+      Serial.println("[X3FW] battery: read failed");
+    }
+    uint16_t rawStatus = 0;
+    if (battery.readRawBatteryStatus(rawStatus)) {
+      // BatteryStatus()のビット位置はライブラリ未検証(README参照)。ここでは
+      // 生の値をログに出すのみで、充電判定には使わない。
+      Serial.printf("[X3FW] battery raw BatteryStatus=0x%04X\n", rawStatus);
+    }
+  } else {
+    Serial.println("[X3FW] battery gauge (BQ27220) not detected");
   }
 
   renderAndRefresh(EInkDisplay::FULL_REFRESH);
@@ -112,6 +145,18 @@ void loop() {
       renderAndRefresh(EInkDisplay::FULL_REFRESH);
     } else if (action == ScreenAction::kRedraw) {
       // 部分更新(FAST_REFRESH)でちらつきを抑えて書き換える
+      renderAndRefresh(EInkDisplay::FAST_REFRESH);
+    }
+  }
+
+  // バッテリー残量は緩やかにしか変化しないため、一定間隔でのみ読み直す。
+  // 値が変化した場合のみ再描画し、無駄な部分更新を避ける。
+  if (millis() - lastBatteryCheckMs >= kBatteryCheckIntervalMs) {
+    lastBatteryCheckMs = millis();
+    const int percent = battery.readPercent();
+    if (percent >= 0 && percent != lastKnownBatteryPercent) {
+      applyBatteryPercent(percent);
+      Serial.printf("[X3FW] battery: %d%%\n", percent);
       renderAndRefresh(EInkDisplay::FAST_REFRESH);
     }
   }
