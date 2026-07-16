@@ -11,6 +11,9 @@ class SettingRow : public Widget {
     kInvert,   // 背景反転(黒地に白文字)
   };
 
+  // デフォルト構築(可変長リストでの配列確保用)。setBounds/setLabel/setValueで
+  // 後から内容を設定する。
+  SettingRow() : bounds_{}, label_(""), value_("") {}
   SettingRow(Rect bounds, const char* label, const char* value)
       : bounds_(bounds), label_(label), value_(value) {}
 
@@ -18,6 +21,8 @@ class SettingRow : public Widget {
   void setValue(const char* value) { value_ = value; }
   void setSelected(bool selected) { selected_ = selected; }
   void setSelectionStyle(SelectionStyle style) { style_ = style; }
+  // 可変長リスト(フォルダ画面など)で行を使い回す際に、位置・高さを再設定する用。
+  void setBounds(const Rect& bounds) { bounds_ = bounds; }
   bool isSelected() const { return selected_; }
   const Rect& bounds() const { return bounds_; }
 

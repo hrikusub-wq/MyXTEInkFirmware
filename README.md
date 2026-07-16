@@ -64,7 +64,7 @@ esptool --chip esp32c3 --port COM3 --baud 921600 write_flash 0x0 x3_stock_firmwa
 
 - [x] フェーズ0: プロジェクトセットアップ、Hello World描画、ボタン入力のシリアル出力
 - [x] フェーズ1: 共通UIコンポーネント (ステータスバー、SettingRow、HomeGridButton、フッターガイド)
-- [ ] フェーズ2: ホーム画面とフォルダ画面
+- [x] フェーズ2: ホーム画面とフォルダ画面
 - [ ] フェーズ3: TXT読書画面と基本の読書中メニュー
 - [ ] フェーズ4: 設定画面
 - [ ] フェーズ5: フォントシステム (SDカードからのカスタムフォント読み込み、CJK対応)
@@ -96,3 +96,15 @@ src/
 - テキスト描画は`Font`インターフェース(`gfx/Font.h`)経由で行い、UIコンポーネント
   側でpxのハードコードによるレイアウトをしない。現在の実装は`MiniFontImpl`
   (ASCII専用5x7固定幅)のみだが、フェーズ5で可変幅CJKフォントに差し替える設計
+- **SDカード初期化とSPIバスの落とし穴**: `EInkDisplay::begin()`が内部で
+  `SPI.begin(sclk, -1, mosi, cs)`とMISOピン抜きでSPIバスを初期化する。ESP32の
+  `SPIClass::begin()`は「既にバスが初期化済みなら何もせずtrueを返すだけ」の
+  実装のため、後からMISOを指定して`SPI.begin()`を呼び直しても無視される。
+  SDカード(`FileBrowserService::begin()`)を初期化する前に必ず`SPI.end()`で
+  切断してから`SPI.begin(sclk, miso, mosi, -1)`で再初期化すること。またSDカードの
+  電源制御(GPIO13)は単純な`OUTPUT`ではなく`OUTPUT_OPEN_DRAIN`で駆動する必要がある
+  (実機解析情報の"OUTPUT with pullup"に対応)。どちらか片方でも欠けると
+  `SD_CARD_ERROR_CMD0`(応答なし)で検出に失敗する
+- フォルダ画面のファイル/フォルダ一覧には`SDCardManager::listFiles()`ではなく
+  `FileBrowserService`(自作ラッパー、`core/FileBrowserService.h`)を使う。
+  `listFiles()`はディレクトリを除外してしまうため、ファイラー用途には使えない
