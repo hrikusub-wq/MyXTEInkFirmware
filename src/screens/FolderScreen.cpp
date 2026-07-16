@@ -22,6 +22,11 @@ IconId iconForEntry(const DirEntry& entry) {
   if (lowerName.endsWith(".txt")) return IconId::kDescription;
   if (lowerName.endsWith(".md") || lowerName.endsWith(".markdown")) return IconId::kMarkdown;
   if (lowerName.endsWith(".epub")) return IconId::kImportContacts;
+  // .binは現状XTEinkToolkit等で変換済みのカスタムフォントファイル専用として扱う。
+  // 将来.bin拡張子がフォント以外(テーマファイル等)にも使われるようになったら、
+  // 拡張子だけでなくファイル先頭のマジックナンバーで判定する仕組みへの
+  // 拡張を検討すること。
+  if (lowerName.endsWith(".bin")) return IconId::kFontDownload;
   return IconId::kBook;  // 拡張子不明のファイルは汎用の本アイコンで代用
 }
 
