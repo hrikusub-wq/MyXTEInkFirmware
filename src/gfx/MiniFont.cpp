@@ -1,5 +1,7 @@
 #include "MiniFont.h"
 
+#include "FrameBufferOps.h"
+
 namespace MiniFont {
 
 // 収録している文字。この並び順がグリフテーブルの並び順と対応する。
@@ -109,13 +111,6 @@ static const uint8_t* glyphFor(char c) {
   return GLYPH_TOFU;
 }
 
-// 1ピクセルを黒にする(0=黒)。画面外は無視。
-static inline void setBlackPixel(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int x, int y) {
-  if (x < 0 || y < 0 || x >= fbWidth || y >= fbHeight) return;
-  const uint32_t widthBytes = (fbWidth + 7) / 8;
-  fb[static_cast<uint32_t>(y) * widthBytes + (x >> 3)] &= ~(0x80 >> (x & 7));
-}
-
 void drawChar(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
               int x, int y, char c, int scale) {
   if (scale < 1) scale = 1;
@@ -127,29 +122,61 @@ void drawChar(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
       // scale x scale の塗りつぶしで1ドットを表現する
       for (int dy = 0; dy < scale; dy++) {
         for (int dx = 0; dx < scale; dx++) {
-          setBlackPixel(fb, fbWidth, fbHeight, x + col * scale + dx, y + row * scale + dy);
+          FrameBufferOps::setBlackPixel(fb, fbWidth, fbHeight, x + col * scale + dx, y + row * scale + dy);
         }
       }
     }
   }
 }
 
+namespace {
+
+// UTF-8の先頭バイトから、そのシーケンスが何バイトかを判定する。
+// 不正なバイト列は1として扱い、1バイトだけ読み飛ばす(無限ループ防止)。
+int utf8SequenceLength(unsigned char leadByte) {
+  if ((leadByte & 0x80) == 0x00) return 1;  // 0xxxxxxx (ASCII)
+  if ((leadByte & 0xE0) == 0xC0) return 2;  // 110xxxxx
+  if ((leadByte & 0xF0) == 0xE0) return 3;  // 1110xxxx
+  if ((leadByte & 0xF8) == 0xF0) return 4;  // 11110xxx
+  return 1;
+}
+
+}  // namespace
+
 void drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
-              int x, int y, const char* text, int scale) {
+              int x, int y, const char* utf8Text, int scale) {
   if (scale < 1) scale = 1;
   int cursorX = x;
-  for (const char* p = text; *p != '\0'; p++) {
-    drawChar(fb, fbWidth, fbHeight, cursorX, y, *p, scale);
+  const char* p = utf8Text;
+  while (*p != '\0') {
+    const int seqLen = utf8SequenceLength(static_cast<unsigned char>(*p));
+    if (seqLen == 1) {
+      drawChar(fb, fbWidth, fbHeight, cursorX, y, *p, scale);
+    } else {
+      // 収録グリフのないマルチバイト文字は豆腐1個分として描画する
+      drawChar(fb, fbWidth, fbHeight, cursorX, y, '\0', scale);
+    }
     cursorX += ADVANCE * scale;
+    p += seqLen;
   }
 }
 
-int textWidth(const char* text, int scale) {
+int textWidth(const char* utf8Text, int scale) {
   if (scale < 1) scale = 1;
-  const int len = static_cast<int>(strlen(text));
-  if (len == 0) return 0;
+  int count = 0;
+  const char* p = utf8Text;
+  while (*p != '\0') {
+    p += utf8SequenceLength(static_cast<unsigned char>(*p));
+    count++;
+  }
+  if (count == 0) return 0;
   // 最後の文字は字間の1pxを含めない
-  return (len * ADVANCE - 1) * scale;
+  return (count * ADVANCE - 1) * scale;
+}
+
+int lineHeight(int scale) {
+  if (scale < 1) scale = 1;
+  return (GLYPH_H + LINE_GAP) * scale;
 }
 
 }  // namespace MiniFont
