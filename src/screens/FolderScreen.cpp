@@ -31,6 +31,8 @@ FolderScreen::FolderScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font
     : fileBrowser_(fileBrowser),
       statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
+  statusBar_.setBatteryPercent(87);
+
   // UP/DOWN(リストのフォーカス移動)は側面ボタンのためフッターには表示できない。
   footerItems_[0] = {PhysicalButton::kBack, "HOME"};
   footerItems_[1] = {PhysicalButton::kConfirm, "", IconId::kCheck, true};

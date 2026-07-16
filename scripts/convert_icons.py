@@ -45,6 +45,10 @@ ICON_LIST = [
     ("kChevronBackward", "chevron_backward"),
     ("kChevronForward", "chevron_forward"),
     ("kCloud", "cloud"),
+    ("kBatteryFull", "battery_full"),
+    ("kBatteryHalf", "battery_half"),
+    ("kBatteryLow", "battery_low"),
+    ("kBatteryCharging", "battery_charging"),
 ]
 
 # リスト/フッター用の小サイズと、ホームグリッド用の大サイズの2種類。

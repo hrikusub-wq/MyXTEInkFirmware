@@ -8,7 +8,7 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
     : statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   statusBar_.setLeftText("12:34");
-  statusBar_.setRightText("87%");
+  statusBar_.setBatteryPercent(87);
 
   // UP/DOWN(グリッドの縦移動)は側面ボタンのためフッターには表示できない。
   // LEFT/RIGHTは同じ"MOVE"だと見分けがつかないため、矢印アイコンで向きを示す。
