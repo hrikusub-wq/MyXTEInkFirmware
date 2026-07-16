@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+
+# ローカルクローンで利用(README参照)。gitでは追跡しない
+open-x4-sdk/
