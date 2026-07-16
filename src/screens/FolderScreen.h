@@ -50,7 +50,7 @@ class FolderScreen : public Screen {
 
   StatusBar statusBar_;
   FooterGuide footer_;
-  FooterGuideItem footerItems_[3];
+  FooterGuideItem footerItems_[4];
   char pageLabel_[16] = "1/1";
 
   SettingRow rows_[kMaxVisibleRows];

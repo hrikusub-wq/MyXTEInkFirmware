@@ -14,16 +14,30 @@ void formatSize(uint32_t bytes, char* buf, size_t bufSize) {
   }
 }
 
+IconId iconForEntry(const DirEntry& entry) {
+  if (entry.isDirectory) return IconId::kFolder;
+
+  String lowerName = entry.name;
+  lowerName.toLowerCase();
+  if (lowerName.endsWith(".txt")) return IconId::kDescription;
+  if (lowerName.endsWith(".md") || lowerName.endsWith(".markdown")) return IconId::kMarkdown;
+  if (lowerName.endsWith(".epub")) return IconId::kImportContacts;
+  return IconId::kBook;  // 拡張子不明のファイルは汎用の本アイコンで代用
+}
+
 }  // namespace
 
 FolderScreen::FolderScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, FileBrowserService& fileBrowser)
     : fileBrowser_(fileBrowser),
       statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  footerItems_[0] = {"UP/DN", "MOVE"};
-  footerItems_[1] = {"L/R", "IN/OUT"};
-  footerItems_[2] = {"PG", pageLabel_};
-  footer_.setItems(footerItems_, 3);
+  // UP/DOWN(リストのフォーカス移動)は側面ボタンのためフッターには表示できない。
+  footerItems_[0] = {PhysicalButton::kBack, "HOME"};
+  footerItems_[1] = {PhysicalButton::kConfirm, "", IconId::kCheck, true};
+  footerItems_[2] = {PhysicalButton::kLeft, "", IconId::kChevronBackward, true};
+  footerItems_[3] = {PhysicalButton::kRight, "", IconId::kChevronForward, true};
+  footer_.setItems(footerItems_, 4);
+  footer_.setTrailingText(pageLabel_);
 
   layoutRows(fbWidth, fbHeight, font);
   reloadCurrentDirectory();
@@ -61,7 +75,7 @@ void FolderScreen::reloadRowWindowForFocus() {
   int count = 0;
   for (int i = startIdx; i < total && count < rowsPerPage_; i++, count++) {
     const DirEntry& entry = entries_[i];
-    rowLabels_[count] = entry.isDirectory ? ("[" + entry.name + "]") : entry.name;
+    rowLabels_[count] = entry.name;
     if (entry.isDirectory) {
       rowValues_[count] = "<DIR>";
     } else {
@@ -71,6 +85,7 @@ void FolderScreen::reloadRowWindowForFocus() {
     }
     rows_[count].setLabel(rowLabels_[count].c_str());
     rows_[count].setValue(rowValues_[count].c_str());
+    rows_[count].setIcon(iconForEntry(entry));
     rows_[count].setSelected(i == focusIndex_);
   }
   visibleRowCount_ = count;

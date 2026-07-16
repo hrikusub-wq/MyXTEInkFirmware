@@ -10,9 +10,11 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
   statusBar_.setLeftText("12:34");
   statusBar_.setRightText("87%");
 
-  footerItems_[0] = {"ARROWS", "MOVE"};
-  footerItems_[1] = {"OK", "OPEN"};
-  footerItems_[2] = {"PWR", "SLEEP"};
+  // UP/DOWN(グリッドの縦移動)は側面ボタンのためフッターには表示できない。
+  // LEFT/RIGHTは同じ"MOVE"だと見分けがつかないため、矢印アイコンで向きを示す。
+  footerItems_[0] = {PhysicalButton::kLeft, "", IconId::kChevronBackward, true};
+  footerItems_[1] = {PhysicalButton::kRight, "", IconId::kChevronForward, true};
+  footerItems_[2] = {PhysicalButton::kConfirm, "OPEN", IconId::kCheck, true};
   footer_.setItems(footerItems_, 3);
 
   const int gridTop = kStatusBarHeight + kBookAreaHeight;
@@ -30,6 +32,10 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
       buttons_[i].setLabel(labels[i]);
     }
   }
+  // kEmpty(4番目、"----")は未使用のためアイコンを設定しない
+  buttons_[static_cast<int>(GridButton::kRead)].setIcon(IconId::kImportContacts);
+  buttons_[static_cast<int>(GridButton::kFolder)].setIcon(IconId::kFolder);
+  buttons_[static_cast<int>(GridButton::kSettings)].setIcon(IconId::kSettings);
 
   updateFocus();
 }
