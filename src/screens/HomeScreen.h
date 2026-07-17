@@ -28,8 +28,9 @@ class HomeScreen : public Screen {
   // 「どのグリッドボタンが選ばれて遷移が要求されたか」を知るために呼ぶ。
   GridButton lastActivatedButton() const { return static_cast<GridButton>(focusIndex_); }
 
-  // main.cpp側がBatteryServiceから読み取った最新の残量をここで反映する。
+  // main.cpp側がBatteryServiceから読み取った最新の残量・充電状態をここで反映する。
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
+  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
 
  private:
   static constexpr int kGridCols = 2;

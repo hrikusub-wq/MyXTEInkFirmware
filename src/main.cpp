@@ -40,6 +40,7 @@ FileBrowserService fileBrowser;
 BatteryService battery;
 
 int lastKnownBatteryPercent = -1;
+bool lastKnownBatteryCharging = false;
 unsigned long lastBatteryCheckMs = 0;
 constexpr unsigned long kBatteryCheckIntervalMs = 30000;
 
@@ -73,12 +74,15 @@ void renderAndRefresh(EInkDisplay::RefreshMode mode) {
   display.displayBuffer(mode);
 }
 
-// 両画面のStatusBarに残量を反映する(画面切り替え時にどちらも最新値であるように)。
-void applyBatteryPercent(int percent) {
+// 両画面のStatusBarに残量・充電状態を反映する(画面切り替え時にどちらも最新値であるように)。
+void applyBatteryState(int percent, bool charging) {
   if (percent < 0) return;
   lastKnownBatteryPercent = percent;
+  lastKnownBatteryCharging = charging;
   homeScreen.setBatteryPercent(percent);
+  homeScreen.setBatteryCharging(charging);
   folderScreen.setBatteryPercent(percent);
+  folderScreen.setBatteryCharging(charging);
 }
 
 }  // namespace
@@ -106,16 +110,18 @@ void setup() {
   if (battery.begin()) {
     Serial.println("[X3FW] battery gauge (BQ27220) ready");
     const int percent = battery.readPercent();
+    const bool charging = battery.isCharging();
     if (percent >= 0) {
-      applyBatteryPercent(percent);
-      Serial.printf("[X3FW] battery: %d%% (%dmV)\n", percent, battery.readMillivolts());
+      applyBatteryState(percent, charging);
+      Serial.printf("[X3FW] battery: %d%% (%dmV) charging=%d (current=%dmA)\n",
+                    percent, battery.readMillivolts(), charging, battery.readCurrentMilliamps());
     } else {
       Serial.println("[X3FW] battery: read failed");
     }
     uint16_t rawStatus = 0;
     if (battery.readRawBatteryStatus(rawStatus)) {
-      // BatteryStatus()のビット位置はライブラリ未検証(README参照)。ここでは
-      // 生の値をログに出すのみで、充電判定には使わない。
+      // BatteryStatus()のビット位置はライブラリ未検証(README参照)。充電判定には
+      // 電流の符号(BatteryService::isCharging())を使っており、これはデバッグ用。
       Serial.printf("[X3FW] battery raw BatteryStatus=0x%04X\n", rawStatus);
     }
   } else {
@@ -149,14 +155,15 @@ void loop() {
     }
   }
 
-  // バッテリー残量は緩やかにしか変化しないため、一定間隔でのみ読み直す。
-  // 値が変化した場合のみ再描画し、無駄な部分更新を避ける。
+  // バッテリー残量・充電状態は緩やかにしか変化しないため、一定間隔でのみ読み直す。
+  // 変化した場合のみ再描画し、無駄な部分更新を避ける。
   if (millis() - lastBatteryCheckMs >= kBatteryCheckIntervalMs) {
     lastBatteryCheckMs = millis();
     const int percent = battery.readPercent();
-    if (percent >= 0 && percent != lastKnownBatteryPercent) {
-      applyBatteryPercent(percent);
-      Serial.printf("[X3FW] battery: %d%%\n", percent);
+    const bool charging = battery.isCharging();
+    if (percent >= 0 && (percent != lastKnownBatteryPercent || charging != lastKnownBatteryCharging)) {
+      applyBatteryState(percent, charging);
+      Serial.printf("[X3FW] battery: %d%% charging=%d\n", percent, charging);
       renderAndRefresh(EInkDisplay::FAST_REFRESH);
     }
   }

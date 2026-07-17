@@ -25,8 +25,9 @@ class FolderScreen : public Screen {
   // 画面を開くたびにルートディレクトリから見せたい場合に呼ぶ。
   void resetToRoot();
 
-  // main.cpp側がBatteryServiceから読み取った最新の残量をここで反映する。
+  // main.cpp側がBatteryServiceから読み取った最新の残量・充電状態をここで反映する。
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
+  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
 
  private:
   static constexpr int kMaxVisibleRows = 24;  // 1ページに表示できる行数の上限(配列確保用)

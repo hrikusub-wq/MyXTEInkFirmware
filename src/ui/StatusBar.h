@@ -11,10 +11,11 @@ class StatusBar : public Widget {
 
   void setLeftText(const char* text) { leftText_ = text; }
 
-  // 残量(0-100)を設定する。表示アイコンはこの値に応じて自動選択される。
-  // 充電中かどうかの判定はopen-x4-sdkのBatteryMonitorにAPIがなく(X4専用の
-  // ADC分圧方式でX3のBQ27220 I2Cには非対応)、今回は未対応。
+  // 残量(0-100)を設定する。充電中でなければこの値に応じてアイコンを自動選択する。
   void setBatteryPercent(int percent) { batteryPercent_ = percent; }
+
+  // 充電中かどうか。trueの間は残量に関わらずbattery_chargingアイコンを表示する。
+  void setBatteryCharging(bool charging) { batteryCharging_ = charging; }
 
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const override;
 
@@ -22,4 +23,5 @@ class StatusBar : public Widget {
   Rect bounds_;
   const char* leftText_ = "";
   int batteryPercent_ = 100;
+  bool batteryCharging_ = false;
 };

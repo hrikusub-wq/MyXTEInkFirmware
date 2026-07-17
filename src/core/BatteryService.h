@@ -23,9 +23,20 @@ class BatteryService {
   // 電圧(mV)。読み取り失敗時は-1を返す。
   int readMillivolts();
 
-  // 生のBatteryStatus()レジスタ値(0x0A)。充電中判定のビット位置は未検証のため、
-  // 現時点ではデバッグ・検証用途のみ。読み取り失敗時はfalseを返す。
+  // 生のBatteryStatus()レジスタ値(0x0A)。BatteryStatus()のビット定義は
+  // ライブラリ未検証(README参照)のため充電判定には使わず、デバッグ用途のみ。
+  // 読み取り失敗時はfalseを返す。
   bool readRawBatteryStatus(uint16_t& status);
+
+  // 瞬時電流(mA、符号付き)。読み取り失敗時はINT16_MINを返す。
+  int readCurrentMilliamps();
+
+  // 充電中かどうか。瞬時電流がプラス方向にある程度の大きさを持つ場合に
+  // 充電中と判定する(kode_BQ27220の作者コメント"positive=charging"に基づく)。
+  // 実機のUSB接続時にelectric current=+61mA・BatteryStatus DSGビット=0という
+  // 整合する結果が得られたことを根拠にしているが、ポゴピン等USB以外の充電手段が
+  // なく非充電時との比較検証はできていない点に注意。
+  bool isCharging();
 
  private:
   BQ27220 gauge_;

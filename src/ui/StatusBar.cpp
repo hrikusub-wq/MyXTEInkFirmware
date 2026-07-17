@@ -7,7 +7,8 @@ constexpr int kPadding = 8;
 constexpr int kIconPx = static_cast<int>(IconSize::kSmall);
 constexpr int kIconTextGap = 4;
 
-IconId batteryIconFor(int percent) {
+IconId batteryIconFor(int percent, bool charging) {
+  if (charging) return IconId::kBatteryCharging;
   if (percent >= 60) return IconId::kBatteryFull;
   if (percent >= 20) return IconId::kBatteryHalf;
   return IconId::kBatteryLow;  // 低残量は視認性を優先してアラート形状のアイコンにする
@@ -26,7 +27,7 @@ void StatusBar::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const F
 
   const int iconX = bounds_.x + bounds_.w - kPadding - totalWidth;
   const int iconY = bounds_.y + (bounds_.h - kIconPx) / 2;
-  drawIcon(fb, fbWidth, fbHeight, iconX, iconY, batteryIconFor(batteryPercent_), IconSize::kSmall);
+  drawIcon(fb, fbWidth, fbHeight, iconX, iconY, batteryIconFor(batteryPercent_, batteryCharging_), IconSize::kSmall);
   font.drawText(fb, fbWidth, fbHeight, iconX + kIconPx + kIconTextGap, textY, percentBuf);
 
   // 下端に区切り線
