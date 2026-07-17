@@ -11,6 +11,7 @@
 //   GPIO 10 = SPI MOSI (EPD/SD共有)     GPIO 5  = EPD RST
 //   GPIO 21 = EPD CS                    GPIO 6  = EPD BUSY
 //   GPIO 12 = SDカード CS
+//   GPIO 13 = バッテリー電源ラッチMOSFET制御(要最優先初期化、下記参照)
 //   GPIO 1  = ボタンADC1 (4ボタン抵抗ラダー)
 //   GPIO 2  = ボタンADC2 (2ボタン抵抗ラダー)
 //   GPIO 3  = 電源ボタン (アクティブLOW)
@@ -18,6 +19,7 @@
 #include <Arduino.h>
 #include <EInkDisplay.h>
 #include <InputManager.h>
+#include <esp_system.h>
 
 #include "core/BatteryService.h"
 #include "core/FileBrowserService.h"
@@ -26,6 +28,16 @@
 #include "screens/HomeScreen.h"
 
 namespace {
+
+// GPIO13はバッテリーからの給電を自己保持する電源ラッチMOSFETのゲート制御ピン
+// (当初「SDカード電源制御」と誤解していたが、crosspoint-readerのソース調査で
+// 判明。SDカードとは無関係)。USB給電中はUSB自体がVCCを供給するためGPIO13の
+// 状態に関わらず動作するが、USBを抜いてバッテリー単独駆動に切り替わった瞬間、
+// このラッチがHIGHで確実に保持されていないと電源が落ちる(実機でモザイク状の
+// 画面表示のままフリーズし、リセットしても復帰しない不具合として確認)。
+// open-drainではハイインピーダンスになり確実な駆動ができないため、必ず
+// push-pull出力(OUTPUT)でHIGHを駆動すること。他の何よりも先に初期化する。
+constexpr int8_t BATTERY_LATCH_PIN = 13;
 
 constexpr int8_t EPD_SCLK = 8;
 constexpr int8_t EPD_MOSI = 10;
@@ -43,6 +55,19 @@ int lastKnownBatteryPercent = -1;
 bool lastKnownBatteryCharging = false;
 unsigned long lastBatteryCheckMs = 0;
 constexpr unsigned long kBatteryCheckIntervalMs = 30000;
+
+// USB(給電+シリアル)の抜き差しは電源経路の切り替えを伴い、その瞬間に電圧が
+// 不安定になることがある。この間にE-inkへSPI通信を行うとデータが化けて
+// 画面にノイズが焼き付いたまま戻らなくなる不具合を実機で確認したため、
+// USB接続状態が変化してから一定時間はE-ink描画そのものを止めて電源が
+// 落ち着くのを待つ。ボタン入力自体は通常通り処理し、状態(フォーカス位置等)は
+// 更新され続ける(描画だけが遅延する)。
+bool lastUsbConnected = true;
+unsigned long powerUnstableUntilMs = 0;
+constexpr unsigned long kPowerSettleMs = 3000;
+// 不安定期間中にボタン操作等で再描画が抑制された場合、期間が明けたら
+// 最新状態を1回だけ強制的に描画する。
+bool pendingRedrawAfterSettle = false;
 
 // X3の実機は縦持ちで使う機器だが、E-inkパネルはネイティブでは792x528(横長)の
 // フレームバッファしか持たない。UI層は常にこの528x792(縦長)の論理サイズで描画し、
@@ -67,11 +92,36 @@ Screen& currentScreen() {
                                                 : static_cast<Screen&>(folderScreen);
 }
 
+// millis()のオーバーフローを考慮した「まだ不安定期間内か」の判定。
+bool isPowerUnstable() {
+  return static_cast<long>(powerUnstableUntilMs - millis()) > 0;
+}
+
+// USB(Serial)の接続/切断を検知したら、不安定期間の開始時刻を更新する。
+void checkUsbConnectionChange() {
+  const bool usbConnected = static_cast<bool>(Serial);
+  if (usbConnected != lastUsbConnected) {
+    lastUsbConnected = usbConnected;
+    powerUnstableUntilMs = millis() + kPowerSettleMs;
+    if (usbConnected) Serial.println("[X3FW] USB connected, pausing display updates briefly");
+  }
+}
+
 void renderAndRefresh(EInkDisplay::RefreshMode mode) {
   display.clearScreen();
   uint8_t* fb = display.getFrameBuffer();
   currentScreen().render(fb, LOGICAL_WIDTH, LOGICAL_HEIGHT, font);
   display.displayBuffer(mode);
+}
+
+// 電源が不安定な可能性がある間はE-ink描画をスキップする(画面の状態自体は
+// 呼び出し側で更新済みのため、安定後の次の描画で反映される)。
+void safeRenderAndRefresh(EInkDisplay::RefreshMode mode) {
+  if (isPowerUnstable()) {
+    pendingRedrawAfterSettle = true;
+    return;
+  }
+  renderAndRefresh(mode);
 }
 
 // 両画面のStatusBarに残量・充電状態を反映する(画面切り替え時にどちらも最新値であるように)。
@@ -85,12 +135,37 @@ void applyBatteryState(int percent, bool charging) {
   folderScreen.setBatteryCharging(charging);
 }
 
+void logResetReason() {
+  const esp_reset_reason_t reason = esp_reset_reason();
+  const char* reasonStr = "UNKNOWN";
+  switch (reason) {
+    case ESP_RST_POWERON: reasonStr = "POWERON"; break;
+    case ESP_RST_EXT: reasonStr = "EXT"; break;
+    case ESP_RST_SW: reasonStr = "SW"; break;
+    case ESP_RST_PANIC: reasonStr = "PANIC"; break;
+    case ESP_RST_INT_WDT: reasonStr = "INT_WDT"; break;
+    case ESP_RST_TASK_WDT: reasonStr = "TASK_WDT"; break;
+    case ESP_RST_WDT: reasonStr = "WDT"; break;
+    case ESP_RST_DEEPSLEEP: reasonStr = "DEEPSLEEP"; break;
+    case ESP_RST_BROWNOUT: reasonStr = "BROWNOUT"; break;
+    case ESP_RST_SDIO: reasonStr = "SDIO"; break;
+    default: break;
+  }
+  Serial.printf("[X3FW] reset reason: %s (%d)\n", reasonStr, static_cast<int>(reason));
+}
+
 }  // namespace
 
 void setup() {
+  // バッテリー電源ラッチを他の何よりも先に確実にHIGH固定する(詳細は上記コメント参照)。
+  pinMode(BATTERY_LATCH_PIN, OUTPUT);
+  digitalWrite(BATTERY_LATCH_PIN, HIGH);
+
   Serial.begin(115200);
   delay(300);  // USB CDCの接続待ち(接続されていなくても先へ進む)
+  lastUsbConnected = static_cast<bool>(Serial);
   Serial.println("[X3FW] boot: Xteink X3 custom firmware (phase 2)");
+  logResetReason();
 
   input.begin();
 
@@ -133,25 +208,32 @@ void setup() {
 }
 
 void loop() {
+  checkUsbConnectionChange();
+
+  if (pendingRedrawAfterSettle && !isPowerUnstable()) {
+    pendingRedrawAfterSettle = false;
+    renderAndRefresh(EInkDisplay::FULL_REFRESH);
+  }
+
   input.update();
 
   for (uint8_t b = 0; b <= InputManager::BTN_POWER; b++) {
     if (!input.wasPressed(b)) continue;
 
-    Serial.printf("[X3FW] button pressed: %s (index=%u)\n", InputManager::getButtonName(b), b);
+    if (Serial) Serial.printf("[X3FW] button pressed: %s (index=%u)\n", InputManager::getButtonName(b), b);
 
     const ScreenAction action = currentScreen().handleButton(b);
 
     if (action == ScreenAction::kNavigateForward && activeScreen == ActiveScreen::kHome) {
       activeScreen = ActiveScreen::kFolder;
       folderScreen.resetToRoot();
-      renderAndRefresh(EInkDisplay::FULL_REFRESH);
+      safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
     } else if (action == ScreenAction::kNavigateBack && activeScreen == ActiveScreen::kFolder) {
       activeScreen = ActiveScreen::kHome;
-      renderAndRefresh(EInkDisplay::FULL_REFRESH);
+      safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
     } else if (action == ScreenAction::kRedraw) {
       // 部分更新(FAST_REFRESH)でちらつきを抑えて書き換える
-      renderAndRefresh(EInkDisplay::FAST_REFRESH);
+      safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
     }
   }
 
@@ -163,8 +245,8 @@ void loop() {
     const bool charging = battery.isCharging();
     if (percent >= 0 && (percent != lastKnownBatteryPercent || charging != lastKnownBatteryCharging)) {
       applyBatteryState(percent, charging);
-      Serial.printf("[X3FW] battery: %d%% charging=%d\n", percent, charging);
-      renderAndRefresh(EInkDisplay::FAST_REFRESH);
+      if (Serial) Serial.printf("[X3FW] battery: %d%% charging=%d\n", percent, charging);
+      safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
     }
   }
 

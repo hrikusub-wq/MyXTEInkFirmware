@@ -6,11 +6,6 @@
 #include <algorithm>
 
 namespace {
-// X3はSDカードスロットの電源をGPIO13で制御している(README.mdのGPIO割り当て参照)。
-// SDCardManager(SDK)側はこのピンを一切扱わないため、SDCardManager::begin()を
-// 呼ぶ前にここで明示的に電源を入れる。
-constexpr int kSdPowerPin = 13;
-
 // EPD/SD共有SPIバスのピン(README.mdのGPIO割り当て参照)。
 // EInkDisplay::begin()は内部でSPI.begin(sclk, -1, mosi, cs)を呼んでおり、
 // MISOピンを設定しない(EPDは書き込み専用でMISOを使わないため)。そのままだと
@@ -22,11 +17,9 @@ constexpr int kSpiMosi = 10;
 }  // namespace
 
 bool FileBrowserService::begin() {
-  // 実機解析情報によれば、このピンは"OUTPUT with pullup"として扱われている
-  // (単純なpush-pull OUTPUTではなくオープンドレイン+プルアップの可能性がある)。
-  pinMode(kSdPowerPin, OUTPUT_OPEN_DRAIN);
-  digitalWrite(kSdPowerPin, HIGH);
-  delay(200);  // 電源安定待ち(SDカードの起動には数百ms要することがある)
+  // GPIO13(旧来「SDカード電源制御」と誤解していたピン)はSDカードとは無関係。
+  // 実際にはバッテリー電源ラッチMOSFETの制御ピンで、main.cppのsetup()冒頭で
+  // 最優先で初期化している(core/README参照)。ここでは触らない。
 
   // SPIClass::begin()は「既にバスが初期化済みならピン設定を変えずtrueを返すだけ」
   // という実装のため、EInkDisplay::begin()が先にMISO抜きで初期化した状態のままだと
