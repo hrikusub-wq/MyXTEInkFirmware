@@ -7,7 +7,6 @@
 HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
     : statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  statusBar_.setLeftText("12:34");
   statusBar_.setBatteryPercent(87);
 
   // UP/DOWN(グリッドの縦移動)は側面ボタンのためフッターには表示できない。
@@ -40,6 +39,18 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
   updateFocus();
 }
 
+void HomeScreen::setClockText(const char* text) {
+  clockText_ = text;
+  statusBar_.setLeftText(clockText_.c_str());
+}
+
+void HomeScreen::setLastBook(const String& path, int percent) {
+  lastBookPath_ = path;
+  lastBookPercent_ = percent;
+  const int lastSlash = path.lastIndexOf('/');
+  lastBookTitle_ = (lastSlash >= 0) ? path.substring(lastSlash + 1) : path;
+}
+
 void HomeScreen::updateFocus() {
   for (int i = 0; i < kButtonCount; i++) {
     buttons_[i].setSelected(i == focusIndex_);
@@ -62,10 +73,19 @@ void HomeScreen::drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbH
   const int textY0 = iconY;
   const int lineH = font.lineHeight();
 
-  font.drawText(fb, fbWidth, fbHeight, textX, textY0, "NO BOOK YET");
-  font.drawText(fb, fbWidth, fbHeight, textX, textY0 + lineH + 8, "OPEN A FILE FROM");
-  font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 2, "FOLDER TO START");
-  font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 3 + 12, "0% - -- LEFT");
+  if (lastBookPath_.length() > 0) {
+    char progressBuf[24];
+    snprintf(progressBuf, sizeof(progressBuf), "%d%% READ", lastBookPercent_);
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0, lastBookTitle_.c_str());
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + lineH + 8, progressBuf);
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 2, "PRESS OPEN TO");
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 3 + 12, "CONTINUE READING");
+  } else {
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0, "NO BOOK YET");
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + lineH + 8, "OPEN A FILE FROM");
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 2, "FOLDER TO START");
+    font.drawText(fb, fbWidth, fbHeight, textX, textY0 + (lineH + 8) * 3 + 12, "0% - -- LEFT");
+  }
 }
 
 void HomeScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
@@ -114,12 +134,19 @@ ScreenAction HomeScreen::handleButton(uint8_t buttonIndex) {
     return ScreenAction::kNone;
   }
   if (buttonIndex == InputManager::BTN_CONFIRM) {
-    // 現時点で実際に画面遷移するのは「フォルダ」のみ。READ/SETTINGSは
-    // まだ実画面がないため何もしない(フェーズ3・フェーズ4で実装予定)。
-    if (lastActivatedButton() == GridButton::kFolder) {
+    // フォルダ・設定はどちらもkNavigateForwardを返す。main.cpp側がlastActivatedButton()
+    // を見てどちらの画面に遷移するか判断する。
+    if (lastActivatedButton() == GridButton::kFolder || lastActivatedButton() == GridButton::kSettings) {
       return ScreenAction::kNavigateForward;
     }
+    // READは直近に開いていた本があるときだけ機能する(なければ何もしない)。
+    if (lastActivatedButton() == GridButton::kRead && lastBookPath_.length() > 0) {
+      return ScreenAction::kOpenFile;
+    }
     return ScreenAction::kNone;
+  }
+  if (buttonIndex == InputManager::BTN_BACK) {
+    return ScreenAction::kOpenHistory;
   }
 
   return ScreenAction::kNone;

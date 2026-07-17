@@ -9,6 +9,10 @@ class MiniFontImpl : public Font {
   // scaleはMiniFontの拡大率(1=5x7px、6=30x42pxなど)。
   explicit MiniFontImpl(int scale) : scale_(scale < 1 ? 1 : scale) {}
 
+  // 拡大率をランタイムで変更する(設定画面の文字サイズ変更用)。
+  void setScale(int scale) { scale_ = scale < 1 ? 1 : scale; }
+  int scale() const { return scale_; }
+
   int measureText(const char* utf8Text) const override;
   int lineHeight() const override;
   void drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,

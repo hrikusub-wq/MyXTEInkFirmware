@@ -12,6 +12,8 @@ enum class ScreenAction {
   kRedraw,           // 同じ画面内で見た目が変わった(部分更新でよい)
   kNavigateForward,  // 別の画面を開きたい(例: ホーム→フォルダ)
   kNavigateBack,     // 前の画面に戻りたい(例: フォルダ→ホーム)
+  kOpenFile,         // ファイルを開いて読書画面に遷移したい(呼び出し元がパスを問い合わせて開く)
+  kOpenHistory,      // 履歴画面を開きたい(例: ホームでBACKが押された)
 };
 
 // 1画面(ホーム、フォルダ、設定など)の共通インターフェース。

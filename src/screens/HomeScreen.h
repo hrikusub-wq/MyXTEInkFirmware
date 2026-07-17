@@ -4,11 +4,10 @@
 #include "../ui/Screen.h"
 #include "../ui/StatusBar.h"
 
-// ホーム画面。上部に直近の本(プレースホルダー表示)、下部に2x2グリッド
-// (読書へ/フォルダ/設定/空き)を表示する。
+// ホーム画面。上部に直近の本(TXT読書画面での進捗があれば実データ、なければ
+// プレースホルダー表示)、下部に2x2グリッド(読書へ/フォルダ/設定/空き)を表示する。
 //
-// 現時点ではTXT読書機能もEPUB対応もないため、上部の本情報は完全にダミー表示。
-// 実データ(実際に開いていたファイル・進捗)との連携はフェーズ3(TXT読書画面)以降で行う。
+// EPUB対応はまだないため、上部の本情報が示せるのはTXTファイルの進捗のみ。
 class HomeScreen : public Screen {
  public:
   // グリッドボタンのどれが選ばれたかをmain.cpp(画面遷移の管理者)に伝えるための識別子。
@@ -32,6 +31,18 @@ class HomeScreen : public Screen {
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
   void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
 
+  // 直近に開いていた本を反映する(起動時・読書画面を閉じたときにmain.cppが呼ぶ)。
+  // pathが空のままなら「本がまだない」プレースホルダー表示が続く。
+  void setLastBook(const String& path, int percent);
+
+  // GridButton::kReadがCONFIRMされScreenAction::kOpenFileが返ったとき、
+  // main.cpp側がここから開くべきファイルパスを取得する。
+  const String& lastBookPath() const { return lastBookPath_; }
+
+  // ステータスバー左側の時刻表示(設定でON/OFF切り替え可能)。空文字列で非表示。
+  // main.cpp側がRtcServiceから読み取った"HH:MM"を定期的に渡す。
+  void setClockText(const char* text);
+
  private:
   static constexpr int kGridCols = 2;
   static constexpr int kGridRows = 2;
@@ -49,4 +60,9 @@ class HomeScreen : public Screen {
   FooterGuideItem footerItems_[3];
   HomeGridButton buttons_[kButtonCount];
   int focusIndex_ = static_cast<int>(GridButton::kFolder);
+
+  String lastBookPath_;
+  String lastBookTitle_;
+  int lastBookPercent_ = 0;
+  String clockText_;
 };

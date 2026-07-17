@@ -9,10 +9,17 @@
 
 // SDカードのファイル/フォルダ一覧を表示する画面。
 //
-// - UP/DOWN: リスト内のフォーカス移動(ページをまたいで移動する)
-// - RIGHT/CONFIRM: フォーカス中がディレクトリならその中に入る
-// - LEFT: 親ディレクトリに戻る(ルートにいるときは何もしない)
-// - BACK: ホーム画面に戻る(呼び出し側がScreenAction::kNavigateBackを見て切り替える)
+// - LEFT/RIGHT・UP/DOWN: リスト内のフォーカス移動(どれも同じ意味、ページをまたいで
+//   移動する。他のリスト画面(SettingsScreen/HistoryScreen)と統一している)
+// - CONFIRM: フォーカス中がディレクトリならその中に入る、TXTファイルなら開く
+// - BACK: ルートでなければ親ディレクトリへ1段戻る、ルートならホーム画面へ戻る
+//   (呼び出し側がScreenAction::kNavigateBackを見て切り替える)
+//
+// (UP単体を「ディレクトリに入る」に割り当てていた時期があったが、UP長押しの
+// CONFIRMショートカット機能と意味が重複し「側面ボタンを押すと選択になってしまう」
+// 状態になっていたため、CONFIRM系の操作は物理CONFIRMボタン(+その長押し
+// ショートカット)だけに一本化した。「親ディレクトリへ戻る」も同様の理由でDOWN単体
+// ではなくBACK(+その長押しショートカット)に統合している)
 //
 // ファイル/フォルダの一覧表示にはSettingRowを流用している(左:名前、右:種別/サイズ)。
 class FolderScreen : public Screen {
@@ -24,6 +31,15 @@ class FolderScreen : public Screen {
 
   // 画面を開くたびにルートディレクトリから見せたい場合に呼ぶ。
   void resetToRoot();
+
+  // システムフォントが変更されたときにmain.cpp側から呼ぶ。行の高さはフォントの
+  // lineHeight()に依存するため、1ページの行数・行の配置を新しいフォントで
+  // 再計算する(コンストラクタ時のlayoutRows()と同じ処理をやり直す)。
+  void relayout(const Font& font);
+
+  // handleButton()がScreenAction::kOpenFileを返したとき、main.cpp側がこれを使って
+  // 開くべきファイルの絶対パスを取得する。
+  const String& pendingOpenFilePath() const { return pendingOpenPath_; }
 
   // main.cpp側がBatteryServiceから読み取った最新の残量・充電状態をここで反映する。
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
@@ -38,7 +54,7 @@ class FolderScreen : public Screen {
   static int RowHeight(const Font& font) { return font.lineHeight() + kRowPadding; }
 
   void reloadCurrentDirectory();
-  void layoutRows(uint16_t fbWidth, uint16_t fbHeight, const Font& font);
+  void layoutRows(const Font& font);
   // focusIndex_を含むページの範囲をentries_からrows_[0..rowsPerPage_)に反映する。
   // UP/DOWNでのフォーカス移動時、ページをまたいだ場合の表示切り替えもここで行う。
   void reloadRowWindowForFocus();
@@ -47,7 +63,10 @@ class FolderScreen : public Screen {
   void goToParent();
 
   FileBrowserService& fileBrowser_;
+  uint16_t fbWidth_;
+  uint16_t fbHeight_;
   String currentPath_ = "/";
+  String pendingOpenPath_;
   std::vector<DirEntry> entries_;
   int focusIndex_ = 0;  // entries_内のグローバルインデックス
   int rowsPerPage_ = 1;
