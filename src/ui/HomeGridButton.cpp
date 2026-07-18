@@ -5,7 +5,7 @@
 namespace {
 constexpr int kIconPx = static_cast<int>(IconSize::kLarge);
 constexpr int kIconTopMargin = 12;
-constexpr int kIconLabelGap = 8;
+constexpr int kIconLabelGap = 16;  // アイコン下の余白(以前は8。もう少し空けたいというフィードバックを受けて拡大)
 }  // namespace
 
 void HomeGridButton::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {

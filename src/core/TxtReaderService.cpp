@@ -244,12 +244,12 @@ bool TxtReaderService::prevPage() {
   return true;
 }
 
-void TxtReaderService::syncCurrentPageToScrollOffset() {
+void TxtReaderService::syncCurrentPageToOffset(uint32_t offset) {
   // pageOffsets_は逐次スキャンで構築される単調増加列(buildPageIndex()参照)なので、
-  // 先頭から見てscrollOffset_を超えた時点で1つ前の値が「scrollOffset_を含むページ」。
+  // 先頭から見てoffsetを超えた時点で1つ前の値が「offsetを含むページ」。
   int page = 0;
   for (size_t i = 0; i < pageOffsets_.size(); i++) {
-    if (pageOffsets_[i] <= scrollOffset_) {
+    if (pageOffsets_[i] <= offset) {
       page = static_cast<int>(i);
     } else {
       break;
@@ -275,11 +275,105 @@ void TxtReaderService::setReadMode(ReadMode mode) {
     loadScrollWindow();
   } else {
     // 現在のスクロール位置を含むページに合わせてページモードへ戻る。
-    syncCurrentPageToScrollOffset();
+    syncCurrentPageToOffset(scrollOffset_);
     readMode_ = ReadMode::kPaged;
     loadPageAt(currentPage_);
   }
   saveProgress();
+}
+
+bool TxtReaderService::addBookmark() {
+  if (!fileOpen_) return false;
+
+  std::vector<Bookmark> bookmarks;
+  readBookmarks(bookmarks);
+
+  Bookmark b;
+  b.offset = (readMode_ == ReadMode::kScroll)
+                 ? scrollOffset_
+                 : ((currentPage_ >= 0 && currentPage_ < totalPages()) ? pageOffsets_[currentPage_] : 0);
+  b.percent = progressPercent();
+
+  // 追加した時点の表示内容の先頭(空行でない最初の行)を一覧表示用のプレビューにする。
+  for (const auto& line : currentLines_) {
+    String t = line.text;
+    if (line.skipPrefixChars > 0 && line.skipPrefixChars <= t.length()) {
+      t = t.substring(line.skipPrefixChars);
+    }
+    t.trim();
+    if (t.length() == 0) continue;
+
+    constexpr size_t kPreviewMaxBytes = 20;
+    if (t.length() > kPreviewMaxBytes) {
+      size_t cut = kPreviewMaxBytes;
+      while (cut > 0 && isUtf8Continuation(t[cut])) cut--;
+      t = t.substring(0, cut);
+    }
+    t.replace('|', ' ');
+    b.preview = t;
+    break;
+  }
+
+  if (bookmarks.size() >= static_cast<size_t>(kMaxBookmarks)) {
+    bookmarks.erase(bookmarks.begin());  // 上限に達したら最も古いものを捨てる(FIFO)
+  }
+  bookmarks.push_back(b);
+  writeBookmarks(bookmarks);
+  return true;
+}
+
+bool TxtReaderService::readBookmarks(std::vector<Bookmark>& out) const {
+  out.clear();
+  const String content = SdMan.readFile(bookmarksFilePath().c_str());
+  if (content.length() == 0) return false;
+
+  int start = 0;
+  const int len = static_cast<int>(content.length());
+  while (start < len) {
+    int nl = content.indexOf('\n', start);
+    if (nl < 0) nl = len;
+    const String line = content.substring(start, nl);
+    start = nl + 1;
+    if (line.length() == 0) continue;
+
+    const int sep1 = line.indexOf('|');
+    if (sep1 < 0) continue;
+    const int sep2 = line.indexOf('|', sep1 + 1);
+    if (sep2 < 0) continue;
+
+    Bookmark b;
+    b.offset = static_cast<uint32_t>(line.substring(0, sep1).toInt());
+    b.percent = line.substring(sep1 + 1, sep2).toInt();
+    b.preview = line.substring(sep2 + 1);
+    out.push_back(b);
+  }
+  return !out.empty();
+}
+
+void TxtReaderService::writeBookmarks(const std::vector<Bookmark>& bookmarks) const {
+  String content;
+  for (const auto& b : bookmarks) {
+    content += String(b.offset) + "|" + String(b.percent) + "|" + b.preview + "\n";
+  }
+  SdMan.writeFile(bookmarksFilePath().c_str(), content);
+}
+
+bool TxtReaderService::jumpToBookmark(int index) {
+  std::vector<Bookmark> bookmarks;
+  if (!readBookmarks(bookmarks)) return false;
+  if (index < 0 || index >= static_cast<int>(bookmarks.size())) return false;
+
+  const uint32_t offset = bookmarks[static_cast<size_t>(index)].offset;
+  if (readMode_ == ReadMode::kScroll) {
+    scrollOffset_ = offset;
+    scrollHistory_.clear();  // ジャンプ先は連続してスクロールしてきた経路ではないため履歴を破棄する
+    loadScrollWindow();
+  } else {
+    syncCurrentPageToOffset(offset);
+    loadPageAt(currentPage_);
+  }
+  saveProgress();
+  return true;
 }
 
 bool TxtReaderService::scrollForward(int lines) {
@@ -545,7 +639,7 @@ void TxtReaderService::saveProgress() {
   // 含むページへ同期しておく(次回起動時にloadProgress()で正しい位置から再開できる
   // ようにするため。readMode_自体はkScrollのまま保たれ、開き直すとkPagedから始まる
   // 既存の挙動に合わせて、ページ単位での再開になる)。
-  if (readMode_ == ReadMode::kScroll) syncCurrentPageToScrollOffset();
+  if (readMode_ == ReadMode::kScroll) syncCurrentPageToOffset(scrollOffset_);
 
   FsFile f = SdMan.open((cachePathBase() + ".pos").c_str(), O_WRONLY | O_CREAT | O_TRUNC);
   if (f) {

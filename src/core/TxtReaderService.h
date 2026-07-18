@@ -32,6 +32,13 @@ struct BookHistoryEntry {
   int percent = 0;
 };
 
+// ブックマーク1件分(TxtReaderScreen「READING SETTINGS」→「BOOKMARKS」用)。
+struct Bookmark {
+  uint32_t offset = 0;  // ファイル内バイトオフセット(kPaged/kScrollどちらのモードでもこの値だけで位置を復元できる)
+  int percent = 0;      // 追加した時点の読了位置(%、一覧表示用)
+  String preview;        // 追加した時点の表示内容の先頭部分(一覧表示用、約20文字)
+};
+
 class TxtReaderService {
  public:
   // 表示モード。kPagedは従来通りページ単位でめくる方式、kScrollは数行ずつ連続して
@@ -118,6 +125,20 @@ class TxtReaderService {
   bool scrollForward(int lines);
   bool scrollBackward();
 
+  // 現在の表示位置(kPaged中はページ先頭、kScroll中はスクロール位置)にブックマークを
+  // 追加する。isOpen()でない場合はfalseを返す。1冊あたりkMaxBookmarks件を超えたら
+  // 最も古いものから削除する(FIFO)。
+  static constexpr int kMaxBookmarks = 20;
+  bool addBookmark();
+
+  // 現在開いている本のブックマーク一覧を、追加した順で返す(何も無ければfalseを返す)。
+  bool readBookmarks(std::vector<Bookmark>& out) const;
+
+  // 指定インデックス(readBookmarks()の並び順)のブックマーク位置へ移動する。現在の
+  // ReadMode(kPaged/kScroll)は変えず、そのモードのままそのオフセットを表示する。
+  // 範囲外ならfalseを返す。
+  bool jumpToBookmark(int index);
+
   // 最後に開いていた本のパスと進捗(%)を取得する(ホーム画面のプレースホルダー表示用)。
   // 一度も本を開いたことがない場合はfalseを返す。
   static bool readLastBook(String& outPath, int& outPercent);
@@ -146,12 +167,14 @@ class TxtReaderService {
   void saveProgress();
   static void updateHistory(const String& path, int percent);
   String cachePathBase() const;
+  String bookmarksFilePath() const { return cachePathBase() + ".bookmarks"; }
+  void writeBookmarks(const std::vector<Bookmark>& bookmarks) const;
   // 現在のスクロール位置(scrollOffset_)からcurrentLines_を再構築する(kScroll専用)。
   void loadScrollWindow();
-  // scrollOffset_以下で最大のページ境界にcurrentPage_を合わせる(kScroll→kPaged
-  // への切り替え時、およびkScroll中のsaveProgress()での「最後に開いたページ」
-  // 保存に使う)。
-  void syncCurrentPageToScrollOffset();
+  // offset以下で最大のページ境界にcurrentPage_を合わせる(kScroll→kPagedへの
+  // 切り替え時、kScroll中のsaveProgress()での「最後に開いたページ」保存、
+  // jumpToBookmark()のkPaged側で使う)。
+  void syncCurrentPageToOffset(uint32_t offset);
 
   FsFile file_;
   String path_;

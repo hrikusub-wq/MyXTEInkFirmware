@@ -497,6 +497,24 @@ void loop() {
       if (input.getHeldTime() >= kLongPressMs) {
         effectiveButton = (b == InputManager::BTN_UP) ? InputManager::BTN_CONFIRM : InputManager::BTN_BACK;
       }
+    } else if (b == InputManager::BTN_LEFT && activeScreen == ActiveScreen::kReader &&
+               !readerScreen.isOverlayShown()) {
+      // 読書画面(オーバーレイ非表示時)ではLEFTを「短押し=ブックマーク追加、
+      // 長押し=ブックマーク一覧を開く」に割り当てる(TxtReaderScreen.hのクラス
+      // コメント参照)。UP/DOWNと同じ考え方でwasReleased()+getHeldTime()を使う。
+      // 通常のhandleButton()ディスパッチは経由せず、ここで直接呼んで次のボタンへ
+      // 進む(オーバーレイ表示中はこの分岐に入らないため、LEFTは下のelse節経由で
+      // 通常通りhandleButton()に渡り、フォーカス移動等に使われる)。
+      if (!input.wasReleased(b)) continue;
+      if (input.getHeldTime() >= kLongPressMs) {
+        readerScreen.openBookmarkList();
+        if (Serial) Serial.println("[X3FW] bookmark list opened (LEFT long-press)");
+      } else {
+        readerScreen.addBookmark();
+        if (Serial) Serial.println("[X3FW] bookmark added (LEFT short-press)");
+      }
+      safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
+      continue;
     } else {
       if (!input.wasPressed(b)) continue;
     }

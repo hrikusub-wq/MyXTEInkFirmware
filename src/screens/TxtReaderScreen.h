@@ -13,16 +13,32 @@
 //     連続して読んでいる感覚を出す(前の内容の大半が画面上に残ったまま数行だけ
 //     送られる)。
 //
-// - CONFIRM: (オーバーレイ非表示時)「読書設定」オーバーレイを開く。中はSettingsScreen
-//   と同じ操作体系(LEFT/RIGHT・UP/DOWNどちらでもフォーカス移動、決定はCONFIRM)。
+// ボタン割り当て(オーバーレイ非表示時。オーバーレイ表示中はLEFTも含めすべての
+// ボタンが各オーバーレイのフォーカス移動/値変更に使われる、後述の各オーバーレイの
+// 説明を参照):
+// - UP: 前のページ(PAGED) / 数行戻る(SCROLL)
+// - DOWN: 次のページ(PAGED) / 数行進む(SCROLL)
+// - LEFT: 短押しで現在位置にブックマークを追加、長押しでブックマーク一覧
+//   (「ブックマークフォルダ」)を直接開く(READING SETTINGS経由でも同じ一覧を
+//   開けるが、こちらは1ボタンのショートカット)。判定はmain.cpp側で行い
+//   (isOverlayShown()がfalseの間だけ有効)、addBookmark()/openBookmarkList()を
+//   直接呼ぶ(通常のhandleButton()ディスパッチは経由しない)。当初はLEFT+UP
+//   同時押しでの追加を検討したが、UP/DOWNと違いLEFTは別ADCラインのため同時押し
+//   自体は検知できるものの、片方がわずかに先に押されるとページ送り等が誤発火
+//   する場合があったため、この短押し/長押し方式に変更した。
+// - RIGHT: 未使用(以前は次ページだったが、LEFT/RIGHTでのページ送りは廃止し
+//   UP/DOWNに一本化した)。
+// - CONFIRM: 「読書設定」オーバーレイを開く。中はSettingsScreenと同じ操作体系
+//   (LEFT/RIGHT・UP/DOWNどちらでもフォーカス移動、決定はCONFIRM。オーバーレイ内
+//   ではLEFTもこの通常の操作に使われる、上記の「短押し/長押し」割り当ての対象外)。
 //     - MODE: CONFIRMで表示方式を横(PAGE)⇔縦(SCROLL)に切り替える(即時反映)
 //     - SCROLL LINES: CONFIRMでTIMEZONEと同様の編集画面に入り、LEFT/RIGHTで
 //       1〜9の範囲で調整、CONFIRMで保存、BACKで破棄
+//     - BOOKMARKS: CONFIRMでブックマーク一覧を開く。各行はCONFIRMでその位置へ
+//       ジャンプする(一覧・読書設定オーバーレイとも閉じて読書画面に戻る)
 //   オーバーレイ自体はBACKで閉じて読書に戻る。
-// - LEFT/UP: 前のページ(PAGED) / 数行戻る(SCROLL)
-// - RIGHT/DOWN: 次のページ(PAGED) / 数行進む(SCROLL)
-// - BACK: (オーバーレイ非表示時)「閉じてホームへ」の確認オーバーレイを開く/閉じる
-//   オーバーレイ表示中のCONFIRM=閉じてホームへ戻る、BACK=キャンセルして読書に戻る
+// - BACK: 「閉じてホームへ」の確認オーバーレイを開く/閉じる。オーバーレイ表示中の
+//   CONFIRM=閉じてホームへ戻る、BACK=キャンセルして読書に戻る
 //
 // ページ内容の折り返し・進捗保存・Markdown記法の解析(見出し・箇条書き・コード
 // ブロック)はTxtReaderService(core/)に委譲する。このクラスは、その解析結果
@@ -70,6 +86,22 @@ class TxtReaderScreen : public Screen {
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) override;
   ScreenAction handleButton(uint8_t buttonIndex) override;
 
+  // 現在位置にブックマークを追加する(main.cppがLEFT短押しを検知して呼ぶ)。
+  // 成功したら一瞬だけ確認表示(トースト)を出す。isOpen()でない場合は何もしない。
+  void addBookmark();
+
+  // ブックマーク一覧オーバーレイを直接開く(main.cppがLEFT長押しを検知して呼ぶ、
+  // READING SETTINGSを経由しないショートカット)。
+  void openBookmarkList();
+
+  // いずれかのオーバーレイ(CLOSE確認・READING SETTINGS・SCROLL LINES編集・
+  // BOOKMARKS一覧)を表示中かどうか。main.cpp側がLEFTの短押し/長押し特別処理を
+  // 有効にするかどうかの判定に使う(オーバーレイ内ではLEFTを通常のフォーカス
+  // 移動/値変更として使うため、その場合は特別処理を無効にする)。
+  bool isOverlayShown() const {
+    return showCloseOverlay_ || editingScrollLines_ || showReadingSettings_ || showBookmarkList_;
+  }
+
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
   void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
 
@@ -77,8 +109,8 @@ class TxtReaderScreen : public Screen {
   static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
   static constexpr int kContentMargin = 16;
-  // READING SETTINGSオーバーレイの項目数(0=MODE、1=SCROLL LINES)。
-  static constexpr int kReadingSettingsItemCount = 2;
+  // READING SETTINGSオーバーレイの項目数(0=MODE、1=SCROLL LINES、2=BOOKMARKS)。
+  static constexpr int kReadingSettingsItemCount = 3;
 
   void layout(const Font& contentFont);
   void updateStatusAndFooter();
@@ -86,9 +118,11 @@ class TxtReaderScreen : public Screen {
   void enterScrollLinesEdit();
   void adjustScrollLinesDraft(int delta);
   void commitScrollLinesEdit();
+  void enterBookmarkList();
   void drawCloseOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawReadingSettingsOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawScrollLinesEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
+  void drawBookmarkList(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   const Font& contentFont() const { return contentFont_ ? *contentFont_ : *font_; }
   const Font& headingFont1() const { return headingFont1_ ? *headingFont1_ : contentFont(); }
   const Font& headingFont2() const { return headingFont2_ ? *headingFont2_ : contentFont(); }
@@ -114,7 +148,7 @@ class TxtReaderScreen : public Screen {
   TxtReaderService reader_;
   StatusBar statusBar_;
   FooterGuide footer_;
-  FooterGuideItem footerItems_[4];
+  FooterGuideItem footerItems_[3];
   char pageLabel_[16] = "1/1";
   String titleText_;
   bool markdownMode_ = false;
@@ -126,8 +160,16 @@ class TxtReaderScreen : public Screen {
   bool showCloseOverlay_ = false;
 
   bool showReadingSettings_ = false;
-  int readingSettingsFocus_ = 0;  // 0=MODE, 1=SCROLL LINES
+  int readingSettingsFocus_ = 0;  // 0=MODE, 1=SCROLL LINES, 2=BOOKMARKS
 
   bool editingScrollLines_ = false;
   uint8_t scrollLinesDraft_ = 3;
+
+  bool showBookmarkList_ = false;
+  int bookmarkListFocus_ = 0;
+
+  // ブックマーク追加直後、一瞬だけ確認表示を出すためのフラグ。時間経過ではなく
+  // 「次の操作が来たら消す」方式にしている(millis()ベースのタイマーを持ち回さずに
+  // 済むため。handleButton()冒頭でクリアする)。
+  bool showBookmarkToast_ = false;
 };

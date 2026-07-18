@@ -4,9 +4,30 @@
 
 #include "../gfx/FrameBufferOps.h"
 
+namespace {
+struct HomeButtonDef {
+  HomeScreen::GridButton id;
+  IconId icon;
+  const char* label;
+};
+
+// ホーム画面のボタン定義。今後ボタン(=他機能への入り口)を追加する場合は、
+// HomeScreen.hのGridButton enumに値を足した上で、ここに同じ順序で1行追記し、
+// kButtonCountも更新すればよい(レイアウト計算・フォーカス移動は自動で追従する。
+// クラスコメント参照)。
+constexpr HomeButtonDef kButtonDefs[] = {
+    {HomeScreen::GridButton::kRead, IconId::kImportContacts, "READ"},
+    {HomeScreen::GridButton::kSettings, IconId::kSettings, "SETTINGS"},
+    {HomeScreen::GridButton::kFolder, IconId::kFolder, "FOLDER"},
+};
+}  // namespace
+
 HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
     : statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
+  static_assert(sizeof(kButtonDefs) / sizeof(kButtonDefs[0]) == kButtonCount,
+                "kButtonDefs[]の要素数とkButtonCountを一致させてください");
+  (void)font;  // ボタン行の高さは固定px(kButtonRowHeight)で決め打ちのため未使用
   statusBar_.setBatteryPercent(87);
 
   // UP/DOWN(グリッドの縦移動)は側面ボタンのためフッターには表示できない。
@@ -16,25 +37,21 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
   footerItems_[2] = {PhysicalButton::kConfirm, "OPEN", IconId::kCheck, true};
   footer_.setItems(footerItems_, 3);
 
-  const int gridTop = kStatusBarHeight + kBookAreaHeight;
-  const int gridBottom = static_cast<int>(fbHeight) - kFooterHeight;
-  const int cellW = (static_cast<int>(fbWidth) - kGridMargin * (kGridCols + 1)) / kGridCols;
-  const int cellH = (gridBottom - gridTop - kGridMargin * (kGridRows + 1)) / kGridRows;
+  // 列数kColsPerRowで折り返す「アプリグリッド」配置。フッターのすぐ上を最終行と
+  // して、行が増えるほど上へ積み上がっていく(クラスコメント参照)。
+  const int rowBottomMost = static_cast<int>(fbHeight) - kFooterHeight - kButtonRowBottomMargin;
+  const int cellW = (static_cast<int>(fbWidth) - kGridMargin * (kColsPerRow + 1)) / kColsPerRow;
 
-  const char* labels[kButtonCount] = {"READ", "FOLDER", "SETTINGS", "----"};
-  for (int row = 0; row < kGridRows; row++) {
-    for (int col = 0; col < kGridCols; col++) {
-      const int i = row * kGridCols + col;
-      const int x = kGridMargin + col * (cellW + kGridMargin);
-      const int y = gridTop + kGridMargin + row * (cellH + kGridMargin);
-      buttons_[i].setBounds(Rect{x, y, cellW, cellH});
-      buttons_[i].setLabel(labels[i]);
-    }
+  for (int i = 0; i < kButtonCount; i++) {
+    const int row = i / kColsPerRow;
+    const int col = i % kColsPerRow;
+    const int rowFromBottom = kRowCount - 1 - row;  // 最終行(画面下)ほど0に近い
+    const int x = kGridMargin + col * (cellW + kGridMargin);
+    const int y = rowBottomMost - (rowFromBottom + 1) * kButtonRowHeight - rowFromBottom * kGridMargin;
+    buttons_[i].setBounds(Rect{x, y, cellW, kButtonRowHeight});
+    buttons_[i].setLabel(kButtonDefs[i].label);
+    buttons_[i].setIcon(kButtonDefs[i].icon);
   }
-  // kEmpty(4番目、"----")は未使用のためアイコンを設定しない
-  buttons_[static_cast<int>(GridButton::kRead)].setIcon(IconId::kImportContacts);
-  buttons_[static_cast<int>(GridButton::kFolder)].setIcon(IconId::kFolder);
-  buttons_[static_cast<int>(GridButton::kSettings)].setIcon(IconId::kSettings);
 
   updateFocus();
 }
@@ -98,40 +115,20 @@ void HomeScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const 
 }
 
 ScreenAction HomeScreen::handleButton(uint8_t buttonIndex) {
-  const int row = focusIndex_ / kGridCols;
-  const int col = focusIndex_ % kGridCols;
-
-  if (buttonIndex == InputManager::BTN_RIGHT) {
-    if (col + 1 < kGridCols) {
-      focusIndex_ += 1;
-      updateFocus();
-      return ScreenAction::kRedraw;
-    }
-    return ScreenAction::kNone;
+  // RIGHT/DOWNは「次へ」、LEFT/UPは「前へ」。行の境界を無視し、グリッド全体を
+  // 1本の輪(row-major順、A B C / D E F ならA→B→C→D→E→F→A→…)とみなして
+  // 循環移動する(側面ボタン(UP/DOWN)だけでも底面ボタン(LEFT/RIGHT)と同じ操作が
+  // できるように、というフィードバックを受けた仕様。例: Cの次はD、Aの前はF)。
+  // 端で止まらず必ず隣へ移動する。
+  if (buttonIndex == InputManager::BTN_RIGHT || buttonIndex == InputManager::BTN_DOWN) {
+    focusIndex_ = (focusIndex_ + 1) % kButtonCount;
+    updateFocus();
+    return ScreenAction::kRedraw;
   }
-  if (buttonIndex == InputManager::BTN_LEFT) {
-    if (col - 1 >= 0) {
-      focusIndex_ -= 1;
-      updateFocus();
-      return ScreenAction::kRedraw;
-    }
-    return ScreenAction::kNone;
-  }
-  if (buttonIndex == InputManager::BTN_DOWN) {
-    if (row + 1 < kGridRows) {
-      focusIndex_ += kGridCols;
-      updateFocus();
-      return ScreenAction::kRedraw;
-    }
-    return ScreenAction::kNone;
-  }
-  if (buttonIndex == InputManager::BTN_UP) {
-    if (row - 1 >= 0) {
-      focusIndex_ -= kGridCols;
-      updateFocus();
-      return ScreenAction::kRedraw;
-    }
-    return ScreenAction::kNone;
+  if (buttonIndex == InputManager::BTN_LEFT || buttonIndex == InputManager::BTN_UP) {
+    focusIndex_ = (focusIndex_ + kButtonCount - 1) % kButtonCount;
+    updateFocus();
+    return ScreenAction::kRedraw;
   }
   if (buttonIndex == InputManager::BTN_CONFIRM) {
     // フォルダ・設定はどちらもkNavigateForwardを返す。main.cpp側がlastActivatedButton()
