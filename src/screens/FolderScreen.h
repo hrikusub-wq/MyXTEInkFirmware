@@ -7,13 +7,22 @@
 #include "../ui/SettingRow.h"
 #include "../ui/StatusBar.h"
 
-// SDカードのファイル/フォルダ一覧を表示する画面。
+// SDカードのファイル/フォルダ一覧を表示する画面。setRoot()で設定したルートに
+// 応じて2箇所から使い回される: ホーム画面「FOLDER」("/User"、日常使うユーザー
+// ファイル)、設定画面「SYSTEM」("/System"、フォント等の機材データ。ほぼ開かない
+// 想定の読み取り目的)。
 //
 // - LEFT/RIGHT・UP/DOWN: リスト内のフォーカス移動(どれも同じ意味、ページをまたいで
-//   移動する。他のリスト画面(SettingsScreen/HistoryScreen)と統一している)
+//   移動する。他のリスト画面(SettingsScreen/HistoryScreen)と統一している)。
+//   LEFT/RIGHTは長押し中、一定間隔で自動的に連続してフォーカス移動する
+//   (main.cpp参照。E-inkのリフレッシュ待ちで都度ボタンを押し直す手間を省く)。
 // - CONFIRM: フォーカス中がディレクトリならその中に入る、TXTファイルなら開く
-// - BACK: ルートでなければ親ディレクトリへ1段戻る、ルートならホーム画面へ戻る
-//   (呼び出し側がScreenAction::kNavigateBackを見て切り替える)
+// - BACK: ルート(setRoot()で設定したパス)でなければ親ディレクトリへ1段戻る、
+//   ルートなら抜ける(呼び出し側がScreenAction::kNavigateBackを見て、Home/
+//   Settingsのどちらから開かれたかに応じて戻り先を切り替える)
+//
+// 一覧には読める拡張子(txt/md/markdown)のファイルとディレクトリのみ表示する
+// (reloadCurrentDirectory()参照。読めないファイルは一覧から除外する)。
 //
 // (UP単体を「ディレクトリに入る」に割り当てていた時期があったが、UP長押しの
 // CONFIRMショートカット機能と意味が重複し「側面ボタンを押すと選択になってしまう」
@@ -29,8 +38,15 @@ class FolderScreen : public Screen {
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) override;
   ScreenAction handleButton(uint8_t buttonIndex) override;
 
-  // 画面を開くたびにルートディレクトリから見せたい場合に呼ぶ。
+  // 画面を開くたびに(setRoot()で設定した)ルートディレクトリから見せたい場合に呼ぶ。
   void resetToRoot();
+
+  // このFolderScreenインスタンスが「ルート」とみなすパスを設定する。BACKで
+  // それより上には遡らず、ここでScreenAction::kNavigateBackを返す(main.cpp側が
+  // どの画面に戻るかを判定する)。ホーム画面の「FOLDER」("/User")、設定画面の
+  // 「SYSTEM」("/System")の2箇所から同じFolderScreenインスタンスを使い回すために
+  // 導入した(resetToRoot()呼び出し前に呼ぶこと)。
+  void setRoot(const String& rootPath) { rootPath_ = rootPath; }
 
   // システムフォントが変更されたときにmain.cpp側から呼ぶ。行の高さはフォントの
   // lineHeight()に依存するため、1ページの行数・行の配置を新しいフォントで
@@ -65,6 +81,7 @@ class FolderScreen : public Screen {
   FileBrowserService& fileBrowser_;
   uint16_t fbWidth_;
   uint16_t fbHeight_;
+  String rootPath_ = "/";  // setRoot()で変更する。BACKで遡れる上限。
   String currentPath_ = "/";
   String pendingOpenPath_;
   std::vector<DirEntry> entries_;

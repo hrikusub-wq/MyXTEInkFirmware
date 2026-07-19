@@ -2,6 +2,8 @@
 
 #include <InputManager.h>
 
+#include <algorithm>
+
 namespace {
 
 void formatSize(uint32_t bytes, char* buf, size_t bufSize) {
@@ -83,12 +85,19 @@ void FolderScreen::relayout(const Font& font) {
 }
 
 void FolderScreen::resetToRoot() {
-  currentPath_ = "/";
+  currentPath_ = rootPath_;
   reloadCurrentDirectory();
 }
 
 void FolderScreen::reloadCurrentDirectory() {
   entries_ = fileBrowser_.listDirectory(currentPath_.c_str());
+  // 読める(txt/md/markdown)ファイルとディレクトリだけを残す。ユーザーが本来
+  // 見たいファイル一覧に、読めない拡張子(由来不明の.i1/.z1等)が混在して
+  // 選択のストレスになっていたため。ディレクトリは絞り込みの対象外
+  // (ナビゲーションに必要)。
+  entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                 [](const DirEntry& e) { return !e.isDirectory && !isReadableFile(e); }),
+                 entries_.end());
   focusIndex_ = 0;
   reloadRowWindowForFocus();
 }
@@ -128,7 +137,7 @@ void FolderScreen::updateFooter() {
   // BACKはルートでは「ホームへ戻る」、それ以外では「親ディレクトリへ戻る」という
   // 意味に変わる(handleButton()参照)ため、フッターの表示もそれに合わせる
   // (どちらも文字列リテラルなのでポインタを直接差し替えるだけでよい)。
-  footerItems_[0].description = (currentPath_ == "/") ? "HOME" : "UP";
+  footerItems_[0].description = (currentPath_ == rootPath_) ? "HOME" : "UP";
 }
 
 void FolderScreen::enterSelectedIfDirectory() {
@@ -141,7 +150,7 @@ void FolderScreen::enterSelectedIfDirectory() {
 }
 
 void FolderScreen::goToParent() {
-  if (currentPath_ == "/") return;
+  if (currentPath_ == rootPath_) return;
 
   const int lastSlash = currentPath_.lastIndexOf('/');
   currentPath_ = (lastSlash <= 0) ? String("/") : currentPath_.substring(0, lastSlash);
@@ -194,9 +203,10 @@ ScreenAction FolderScreen::handleButton(uint8_t buttonIndex) {
     return ScreenAction::kNone;  // TXT/Markdown以外はまだ読書画面が対応していない
   }
   if (buttonIndex == InputManager::BTN_BACK) {
-    // ルートでなければ親ディレクトリへ1段戻るだけ、ルートまで戻ったらホームへ抜ける
-    // (DOWN長押しのショートカットからもここに来る)。
-    if (currentPath_ != "/") {
+    // ルート(rootPath_)でなければ親ディレクトリへ1段戻るだけ、ルートまで戻ったら
+    // 抜ける(DOWN長押しのショートカットからもここに来る。抜けた先がHome/Settings
+    // どちらかはmain.cpp側がsetRoot()時に記録したフラグで判定する)。
+    if (currentPath_ != rootPath_) {
       goToParent();
       return ScreenAction::kRedraw;
     }

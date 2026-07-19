@@ -37,8 +37,7 @@
 //     - BOOKMARKS: CONFIRMでブックマーク一覧を開く。各行はCONFIRMでその位置へ
 //       ジャンプする(一覧・読書設定オーバーレイとも閉じて読書画面に戻る)
 //   オーバーレイ自体はBACKで閉じて読書に戻る。
-// - BACK: 「閉じてホームへ」の確認オーバーレイを開く/閉じる。オーバーレイ表示中の
-//   CONFIRM=閉じてホームへ戻る、BACK=キャンセルして読書に戻る
+// - BACK: 確認なしで即座にホームへ戻る。
 //
 // ページ内容の折り返し・進捗保存・Markdown記法の解析(見出し・箇条書き・コード
 // ブロック)はTxtReaderService(core/)に委譲する。このクラスは、その解析結果
@@ -94,13 +93,11 @@ class TxtReaderScreen : public Screen {
   // READING SETTINGSを経由しないショートカット)。
   void openBookmarkList();
 
-  // いずれかのオーバーレイ(CLOSE確認・READING SETTINGS・SCROLL LINES編集・
-  // BOOKMARKS一覧)を表示中かどうか。main.cpp側がLEFTの短押し/長押し特別処理を
-  // 有効にするかどうかの判定に使う(オーバーレイ内ではLEFTを通常のフォーカス
-  // 移動/値変更として使うため、その場合は特別処理を無効にする)。
-  bool isOverlayShown() const {
-    return showCloseOverlay_ || editingScrollLines_ || showReadingSettings_ || showBookmarkList_;
-  }
+  // いずれかのオーバーレイ(READING SETTINGS・SCROLL LINES編集・BOOKMARKS一覧)を
+  // 表示中かどうか。main.cpp側がLEFTの短押し/長押し特別処理を有効にするかどうかの
+  // 判定に使う(オーバーレイ内ではLEFTを通常のフォーカス移動/値変更として使うため、
+  // その場合は特別処理を無効にする)。
+  bool isOverlayShown() const { return editingScrollLines_ || showReadingSettings_ || showBookmarkList_; }
 
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
   void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
@@ -119,7 +116,6 @@ class TxtReaderScreen : public Screen {
   void adjustScrollLinesDraft(int delta);
   void commitScrollLinesEdit();
   void enterBookmarkList();
-  void drawCloseOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawReadingSettingsOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawScrollLinesEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawBookmarkList(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
@@ -156,8 +152,6 @@ class TxtReaderScreen : public Screen {
   int contentTop_ = 0;
   int viewportWidthPx_ = 0;
   int viewportHeightPx_ = 1;
-
-  bool showCloseOverlay_ = false;
 
   bool showReadingSettings_ = false;
   int readingSettingsFocus_ = 0;  // 0=MODE, 1=SCROLL LINES, 2=BOOKMARKS

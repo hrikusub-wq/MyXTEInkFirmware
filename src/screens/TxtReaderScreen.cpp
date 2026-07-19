@@ -111,7 +111,6 @@ bool TxtReaderScreen::openFile(const String& path) {
 
   const int lastSlash = path.lastIndexOf('/');
   titleText_ = (lastSlash >= 0) ? path.substring(lastSlash + 1) : path;
-  showCloseOverlay_ = false;
   showReadingSettings_ = false;
   editingScrollLines_ = false;
   showBookmarkList_ = false;
@@ -195,9 +194,7 @@ void TxtReaderScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, c
 
   footer_.render(fb, fbWidth, fbHeight, font);
 
-  if (showCloseOverlay_) {
-    drawCloseOverlay(fb, fbWidth, fbHeight, font);
-  } else if (editingScrollLines_) {
+  if (editingScrollLines_) {
     drawScrollLinesEdit(fb, fbWidth, fbHeight, font);
   } else if (showBookmarkList_) {
     drawBookmarkList(fb, fbWidth, fbHeight, font);
@@ -216,27 +213,6 @@ void TxtReaderScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, c
     FrameBufferOps::drawRectOutline(fb, fbWidth, fbHeight, boxX, boxY, boxW, boxH, 2);
     font.drawText(fb, fbWidth, fbHeight, boxX + 12, boxY + 8, "BOOKMARKED");
   }
-}
-
-void TxtReaderScreen::drawCloseOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
-  const int boxW = static_cast<int>(fbWidth) - 64;
-  const int lineH = font.lineHeight();
-  const int boxH = lineH * 4 + 40;
-  const int boxX = (static_cast<int>(fbWidth) - boxW) / 2;
-  const int boxY = (static_cast<int>(fbHeight) - boxH) / 2;
-
-  FrameBufferOps::fillRect(fb, fbWidth, fbHeight, boxX, boxY, boxW, boxH, false);  // 背景を白でクリア
-  FrameBufferOps::drawRectOutline(fb, fbWidth, fbHeight, boxX, boxY, boxW, boxH, 2);
-
-  const int textY = boxY + 16;
-  font.drawText(fb, fbWidth, fbHeight, boxX + 16, textY, "CLOSE READER?");
-
-  SettingRow closeRow(Rect{boxX + 16, textY + lineH + 12, boxW - 32, lineH + 10}, "CLOSE", "");
-  closeRow.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
-  closeRow.setSelected(true);
-  closeRow.render(fb, fbWidth, fbHeight, font);
-
-  font.drawText(fb, fbWidth, fbHeight, boxX + 16, boxY + boxH - lineH - 12, "CONFIRM=OK  BACK=CANCEL");
 }
 
 void TxtReaderScreen::drawReadingSettingsOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
@@ -342,19 +318,6 @@ void TxtReaderScreen::drawBookmarkList(uint8_t* fb, uint16_t fbWidth, uint16_t f
 ScreenAction TxtReaderScreen::handleButton(uint8_t buttonIndex) {
   showBookmarkToast_ = false;  // 次の操作が来たらブックマーク追加のトーストを消す
 
-  if (showCloseOverlay_) {
-    if (buttonIndex == InputManager::BTN_CONFIRM) {
-      showCloseOverlay_ = false;
-      reader_.close();
-      return ScreenAction::kNavigateBack;
-    }
-    if (buttonIndex == InputManager::BTN_BACK) {
-      showCloseOverlay_ = false;
-      return ScreenAction::kRedraw;
-    }
-    return ScreenAction::kNone;
-  }
-
   if (editingScrollLines_) {
     if (buttonIndex == InputManager::BTN_LEFT || buttonIndex == InputManager::BTN_DOWN) {
       adjustScrollLinesDraft(-1);
@@ -458,8 +421,8 @@ ScreenAction TxtReaderScreen::handleButton(uint8_t buttonIndex) {
     return ScreenAction::kRedraw;
   }
   if (buttonIndex == InputManager::BTN_BACK) {
-    showCloseOverlay_ = true;
-    return ScreenAction::kRedraw;
+    reader_.close();
+    return ScreenAction::kNavigateBack;
   }
 
   return ScreenAction::kNone;

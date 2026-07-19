@@ -1,5 +1,7 @@
 #include "TxtReaderService.h"
 
+#include <new>
+
 namespace {
 constexpr uint32_t kChunkSize = 4096;
 constexpr uint32_t kIndexMagic = 0x31545854;  // "TXT1" (little-endian表記)
@@ -139,10 +141,17 @@ bool classifyMarkdownLine(const String& sourceLine, bool& inCodeBlock, uint8_t& 
 bool TxtReaderService::open(const String& path, const Font& bodyFont, int viewportWidthPx, int viewportHeightPx,
                             bool markdownMode, const Font* headingFont1, const Font* headingFont2,
                             const Font* headingFont3, const Font* listFont) {
+  // ヒープ逼迫の切り分け用の一時的な診断ログ(main.cppの「entering/leaving
+  // standby」ログと合わせて、どこでヒープが減っているかを見る)。
+  if (Serial) Serial.printf("[X3FW] heap: TxtReaderService::open, free=%u\n", ESP.getFreeHeap());
   close();
 
   file_ = SdMan.open(path.c_str(), O_RDONLY);
-  if (!file_) return false;
+  if (!file_) {
+    if (Serial) Serial.printf("[TXT] open: failed to open \"%s\" for read\n", path.c_str());
+    return false;
+  }
+  if (Serial) Serial.printf("[TXT] open: opened \"%s\" for read (this=%p)\n", path.c_str(), (void*)this);
 
   path_ = path;
   fileSize_ = static_cast<uint32_t>(file_.size());
@@ -158,29 +167,78 @@ bool TxtReaderService::open(const String& path, const Font& bodyFont, int viewpo
 
   SdMan.ensureDirectoryExists(kCacheDir);
 
-  if (!loadIndexCache()) {
-    buildPageIndex();
-    saveIndexCache();
+  // buildPageIndex()以下(pageOffsets_・currentLines_等のstd::vector成長、
+  // CjkFontImpl側のグリフキャッシュ確保等)はヒープ確保を伴う処理が多く、待機画面の
+  // JPEG表示直後などヒープが逼迫している状況では確保に失敗しうる。この
+  // プロジェクトはtry/catchを使わない設計だが、ここで捕まえずに投げっぱなしに
+  // すると、std::terminate()→abort()でデバイス全体がクラッシュ・再起動して
+  // しまう不具合が実機で確認された(ファイル1つの読み込み失敗で済むはずが、
+  // 機器全体を巻き込んでしまう)。ここで捕まえ、「ファイルを開けなかった」という
+  // 既存の失敗パス(戻り値false)に落とし込む。
+  try {
+    if (!loadIndexCache()) {
+      buildPageIndex();
+      saveIndexCache();
+    }
+    if (pageOffsets_.empty()) pageOffsets_.push_back(0);  // 空ファイルでも1ページとして扱う
+
+    // 表示するページの読み込みはここから開始する(buildPageIndex()の全文スキャンで
+    // inCodeBlock_がEOF時点の状態のまま残っている可能性があるためリセットする)。
+    // 保存済みページへ直接ジャンプする場合、そのページが本当にコードブロック内かは
+    // 復元できない(ヘッダのコメント「既知の制限」を参照)。
+    inCodeBlock_ = false;
+
+    loadProgress();
+    loadPageAt(currentPage_);
+    // ページをめくらずに閉じた場合でも「最後に開いた本」がホーム画面に反映されるよう、
+    // 開いた時点の状態を保存しておく。
+    saveProgress();
+  } catch (const std::bad_alloc&) {
+    if (Serial) Serial.printf("[TXT] open: heap exhausted while indexing \"%s\"\n", path.c_str());
+    close();
+    return false;
   }
-  if (pageOffsets_.empty()) pageOffsets_.push_back(0);  // 空ファイルでも1ページとして扱う
-
-  // 表示するページの読み込みはここから開始する(buildPageIndex()の全文スキャンで
-  // inCodeBlock_がEOF時点の状態のまま残っている可能性があるためリセットする)。
-  // 保存済みページへ直接ジャンプする場合、そのページが本当にコードブロック内かは
-  // 復元できない(ヘッダのコメント「既知の制限」を参照)。
-  inCodeBlock_ = false;
-
-  loadProgress();
-  loadPageAt(currentPage_);
-  // ページをめくらずに閉じた場合でも「最後に開いた本」がホーム画面に反映されるよう、
-  // 開いた時点の状態を保存しておく。
-  saveProgress();
 
   return true;
 }
 
-void TxtReaderService::close() {
+void TxtReaderService::closeFileHandle() {
   if (fileOpen_) file_.close();
+  fileOpen_ = false;
+  if (Serial) Serial.printf("[TXT] closeFileHandle: closed (this=%p)\n", (void*)this);
+}
+
+bool TxtReaderService::reopenFileHandle() {
+  if (path_.length() == 0) return false;
+  // 念のため既存のハンドルを確実に閉じてから開き直す(BleTransferService.cppの
+  // 同様の防御コードと同じ理由)。
+  if (fileOpen_) file_.close();
+  file_ = SdMan.open(path_.c_str(), O_RDONLY);
+  if (!file_) {
+    if (Serial) Serial.printf("[TXT] reopenFileHandle: failed to reopen \"%s\"\n", path_.c_str());
+    return false;
+  }
+  fileOpen_ = true;
+  if (Serial) Serial.printf("[TXT] reopenFileHandle: reopened \"%s\" (this=%p)\n", path_.c_str(), (void*)this);
+  return true;
+}
+
+void TxtReaderService::close() {
+  if (Serial && fileOpen_) Serial.printf("[TXT] close: closing (this=%p)\n", (void*)this);
+  if (fileOpen_) file_.close();
+
+  // ファイルを切り替えるたびに、直前のファイルの文字で埋まったグリフキャッシュを
+  // 解放する(Font::clearCache()のコメント参照)。実機で、ファイルを開くたびに
+  // 前のファイル分のヒープが完全には戻らず、2〜3ファイル開くとヒープ枯渇に至る
+  // 不具合が確認された。同じフォントを複数のポインタ(font_/listFont_が同一実装
+  // インスタンスを指す等)が指していることがあるが、clearCache()は何度呼んでも
+  // 安全(空にするだけ)なので、重複を気にせず全部呼ぶ。
+  if (font_) font_->clearCache();
+  if (headingFont1_) headingFont1_->clearCache();
+  if (headingFont2_) headingFont2_->clearCache();
+  if (headingFont3_) headingFont3_->clearCache();
+  if (listFont_) listFont_->clearCache();
+
   fileOpen_ = false;
   path_ = "";
   fileSize_ = 0;
@@ -191,12 +249,19 @@ void TxtReaderService::close() {
   listFont_ = nullptr;
   markdownMode_ = false;
   inCodeBlock_ = false;
+  // clear()だけでは内部バッファの容量が保持されたままになる(次にもっと大きい
+  // ファイルを開けば結局再確保が必要になるだけだが、小さいファイルに戻ったときに
+  // 前のファイル分の容量を無駄に抱え続けてしまう)ため、shrink_to_fit()で
+  // 実際にヒープへ返す。
   pageOffsets_.clear();
+  pageOffsets_.shrink_to_fit();
   currentLines_.clear();
+  currentLines_.shrink_to_fit();
   currentPage_ = 0;
   readMode_ = ReadMode::kPaged;
   scrollOffset_ = 0;
   scrollHistory_.clear();
+  scrollHistory_.shrink_to_fit();
 }
 
 const Font* TxtReaderService::headingFontForLevel(uint8_t level) const {
@@ -223,7 +288,17 @@ bool TxtReaderService::loadPageAt(int pageIndex) {
   if (pageIndex < 0 || pageIndex >= totalPages()) return false;
   uint32_t nextOffset = 0;
   currentLines_.clear();
-  loadLinesAtOffset(pageOffsets_[pageIndex], currentLines_, nextOffset);
+  // loadLinesAtOffset()はcurrentLines_・折り返し用の一時vector・CjkFontImplの
+  // グリフキャッシュなど複数のヒープ確保を伴う。ヒープ逼迫時に確保が失敗すると
+  // std::bad_allocが投げられるため、ここで捕まえずページめくり中にデバイス全体を
+  // クラッシュさせてしまわないよう(TxtReaderService::open()の同種のコメント参照)
+  // 捕まえてこのページ送りだけを諦める。
+  try {
+    loadLinesAtOffset(pageOffsets_[pageIndex], currentLines_, nextOffset);
+  } catch (const std::bad_alloc&) {
+    if (Serial) Serial.println("[TXT] loadPageAt: heap exhausted, page not updated");
+    return false;
+  }
   currentPage_ = pageIndex;
   return true;
 }
@@ -261,7 +336,14 @@ void TxtReaderService::syncCurrentPageToOffset(uint32_t offset) {
 void TxtReaderService::loadScrollWindow() {
   uint32_t nextOffset = 0;
   currentLines_.clear();
-  loadLinesAtOffset(scrollOffset_, currentLines_, nextOffset);
+  // loadPageAt()の同種のコメント参照: ヒープ逼迫時のstd::bad_allocでデバイス全体を
+  // クラッシュさせないよう、この1回の表示更新だけを諦める(currentLines_は空の
+  // まま=前回の表示が残るか(EMPTY)表示になるだけで、機器自体は落ちない)。
+  try {
+    loadLinesAtOffset(scrollOffset_, currentLines_, nextOffset);
+  } catch (const std::bad_alloc&) {
+    if (Serial) Serial.println("[TXT] loadScrollWindow: heap exhausted, view not updated");
+  }
 }
 
 void TxtReaderService::setReadMode(ReadMode mode) {
@@ -283,7 +365,7 @@ void TxtReaderService::setReadMode(ReadMode mode) {
 }
 
 bool TxtReaderService::addBookmark() {
-  if (!fileOpen_) return false;
+  if (!isOpen()) return false;
 
   std::vector<Bookmark> bookmarks;
   readBookmarks(bookmarks);
@@ -428,7 +510,15 @@ uint32_t TxtReaderService::advanceByLines(uint32_t offset, int lines) {
 
   std::vector<RenderLine> tmp;
   uint32_t nextOffset = offset;
-  loadLinesAtOffset(offset, tmp, nextOffset);
+  // loadPageAt()の同種のコメント参照: ヒープ逼迫時は進めなかったものとして
+  // 諦める(呼び出し側のscrollForward()はnext<=offsetBeforeを「進めない」と
+  // 解釈して何もしない)。
+  try {
+    loadLinesAtOffset(offset, tmp, nextOffset);
+  } catch (const std::bad_alloc&) {
+    if (Serial) Serial.println("[TXT] advanceByLines: heap exhausted, not advancing");
+    nextOffset = offset;
+  }
 
   viewportHeightPx_ = savedHeight;
   return nextOffset;
@@ -439,9 +529,16 @@ bool TxtReaderService::loadLinesAtOffset(uint32_t offset, std::vector<RenderLine
   if (offset >= fileSize_) return false;
 
   const uint32_t chunkSize = (fileSize_ - offset < kChunkSize) ? (fileSize_ - offset) : kChunkSize;
-  std::vector<uint8_t> buffer(chunkSize);
+  // ページ読み込みのたびに呼ばれるホットパスのため、malloc()の都度確保ではなく
+  // 固定サイズ(kChunkSize=4KB)のstatic配列を使い回す。以前はstd::vectorで都度
+  // ヒープ確保していたが、待機画面のJPEG表示直後などヒープが逼迫している状況で
+  // 確保に失敗するとstd::bad_allocが送出され、この プロジェクトはC++例外を
+  // catchしていないためabort()(パニック→再起動)を引き起こす不具合が実機で
+  // 確認された。4KB程度はRAM予算に対して十分小さいため、常時確保のstatic配列に
+  // することでこの1箇所の確保失敗の可能性自体を無くす。
+  static uint8_t buffer[kChunkSize];
   if (!file_.seek(offset)) return false;
-  const int bytesRead = file_.read(buffer.data(), chunkSize);
+  const int bytesRead = file_.read(buffer, chunkSize);
   if (bytesRead <= 0) return false;
   const uint32_t n = static_cast<uint32_t>(bytesRead);
 

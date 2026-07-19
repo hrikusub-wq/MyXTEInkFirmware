@@ -12,7 +12,7 @@ enum class SystemFontKind : uint8_t {
 // 読書本文フォント(AppSettings::readerBodyFontKind==kCjkFont)のパスが未設定
 // (空文字)の場合に使う既定の.cpfontパス。main.cpp(起動時の自動読み込み)と
 // SettingsScreen(BOOK FONT設定行の現在選択の表示)の両方から参照する。
-constexpr const char* kDefaultReaderBodyFontPath = "/fonts/NotoSansJp_12.cpfont";
+constexpr const char* kDefaultReaderBodyFontPath = "/System/fonts/NotoSansJp_12.cpfont";
 
 // SDカードに永続化する設定値。
 struct AppSettings {
@@ -46,6 +46,27 @@ struct AppSettings {
   // UP/DOWN 1回につき進める/戻る目安の行数(1〜9)。TxtReaderScreenの
   // 「READING SETTINGS」→「SCROLL LINES」で編集する。
   uint8_t scrollStepLines = 3;
+
+  // 側面ボタン(UP/DOWN)を押し続けたとき、CONFIRM/BACKのショートカットとして
+  // 扱うまでの時間(ms)。範囲200〜1500、100ms刻み。SettingsScreenの
+  // 「LONG PRESS」で編集する(main.cppのloop()がinput.getHeldTime()との比較に使う)。
+  uint16_t longPressMs = 500;
+
+  // 旧lastLiveTextPathの名残(未使用)。LiveTextは常に単一の固定パス
+  // (LiveTextScreen::kDefaultPath)だけを扱う一時ファイル方式に変更したため、
+  // 「最後に開いたパスを覚えておく」仕組み自体が不要になった。とはいえ
+  // AppSettingsはSDへ構造体まるごとバイナリダンプする方式(SettingsService.cpp)
+  // のため、このフィールドを削除すると後続フィールド(standbyGammaPercent等)の
+  // バイトオフセットがずれ、更新前の.settings.binを読み込んだ際にガベージ値が
+  // 入ってしまう。互換性維持のためフィールド自体は残し、未使用にするだけに留める。
+  char _reservedUnused[128] = {};
+
+  // 待機画面のJPEG表示(4階調グレースケール)で使うガンマ補正値(%表記、
+  // gamma = standbyGammaPercent/100として使う)。範囲20〜100、5%刻み。
+  // 値が小さいほど中間調を明るく持ち上げる(100=補正なし)。E-inkの4階調表示は
+  // 実物の写真より暗く沈んで見える傾向があり、実機での見え方に応じて
+  // SettingsScreenの「PHOTO GAMMA」で調整できるようにした。
+  uint8_t standbyGammaPercent = 35;
 };
 
 // 設定(AppSettings)をSDカード上の1ファイルに読み書きする薄いラッパー。

@@ -24,4 +24,13 @@ class Font {
   // utf8Textを(x, y)を左上として描画する。
   virtual void drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                         int x, int y, const char* utf8Text) const = 0;
+
+  // グリフキャッシュを持つ実装(CjkFontImpl/XteinkBinFontImpl)向け。読書中の
+  // ファイル切り替え時に呼ぶことで、直前のファイルの文字で埋まったキャッシュを
+  // 解放し、std::vectorの容量も含めてヒープへ返す(実機で、ファイルを開くたびに
+  // 前のファイル分のヒープが完全には戻らず、繰り返すとヒープ枯渇に至る不具合が
+  // 確認された)。キャッシュを持たない実装(MiniFontImpl等)は何もしなくてよい
+  // ため、デフォルトで空実装にしてある。measureText/drawTextと同じ理由でconstに
+  // している(キャッシュはmutableメンバとして保持する実装上の妥協)。
+  virtual void clearCache() const {}
 };

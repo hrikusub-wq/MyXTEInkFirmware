@@ -1,5 +1,6 @@
 #include "XteinkBinFontImpl.h"
 
+#include <new>
 #include <utility>
 
 #include "FrameBufferOps.h"
@@ -121,18 +122,41 @@ const std::vector<uint8_t>* XteinkBinFontImpl::fetchGlyph(uint32_t codepoint) co
     if (g.codepoint == codepoint) return &g.bitmap;
   }
 
-  std::vector<uint8_t> bitmap(charBytes_);
-  const uint32_t offset = codepoint * charBytes_;
-  if (!file_.seek(offset) || file_.read(bitmap.data(), charBytes_) != static_cast<int>(charBytes_)) {
+  // bitmap確保・cache_.push_back()はヒープ確保を伴う。CjkFontImpl::fetchGlyph()の
+  // 同種のコメント参照: ヒープ逼迫時(待機画面のJPEG表示直後等)にこの確保が失敗すると
+  // std::bad_allocが投げられ、キャッチしないとstd::terminate()→abort()でデバイス
+  // 全体がクラッシュ・再起動してしまう不具合が実機で確認された(Markdown見出しの
+  // 描画にこのフォント実装を使うため、CjkFontImpl側だけ対策しても見出し行の描画で
+  // 同じ問題が再発した)。ここで捕まえ、既存のnullptrフォールバック(呼び出し側の
+  // drawText()はbitmap==nullptrなら単に描画をスキップする)に落とし込む。
+  try {
+    std::vector<uint8_t> bitmap(charBytes_);
+    const uint32_t offset = codepoint * charBytes_;
+    if (!file_.seek(offset) || file_.read(bitmap.data(), charBytes_) != static_cast<int>(charBytes_)) {
+      return nullptr;
+    }
+
+    if (cache_.size() >= kCacheCapacity) cache_.erase(cache_.begin());
+    cache_.push_back(CachedGlyph{codepoint, std::move(bitmap)});
+  } catch (const std::bad_alloc&) {
+    if (!loggedHeapExhausted_) {
+      loggedHeapExhausted_ = true;
+      if (Serial) {
+        Serial.println("[XteinkBinFont] fetchGlyph: heap exhausted, skipping glyphs (further occurrences suppressed)");
+      }
+    }
     return nullptr;
   }
-
-  if (cache_.size() >= kCacheCapacity) cache_.erase(cache_.begin());
-  cache_.push_back(CachedGlyph{codepoint, std::move(bitmap)});
   return &cache_.back().bitmap;
 }
 
 int XteinkBinFontImpl::lineHeight() const { return height_ > 0 ? height_ : 1; }
+
+void XteinkBinFontImpl::clearCache() const {
+  cache_.clear();
+  cache_.shrink_to_fit();
+  loggedHeapExhausted_ = false;
+}
 
 int XteinkBinFontImpl::measureText(const char* utf8Text) const {
   if (!ready_) return 0;

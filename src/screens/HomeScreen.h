@@ -31,6 +31,9 @@ class HomeScreen : public Screen {
     kRead,
     kSettings,
     kFolder,
+    kBluetooth,
+    kStandby,
+    kLiveText,
     // 今後ボタンを追加する場合はここに追記(kButtonDefs[]の並び順と一致させる)
   };
 
@@ -60,7 +63,7 @@ class HomeScreen : public Screen {
   void setClockText(const char* text);
 
  private:
-  static constexpr int kButtonCount = 3;  // 実装済みのボタン数(kButtonDefs[]の要素数と一致させること)
+  static constexpr int kButtonCount = 6;  // 実装済みのボタン数(kButtonDefs[]の要素数と一致させること)
   static constexpr int kColsPerRow = 3;   // 1行に並べる列数。超えた分は自動で次の行になる
   static constexpr int kRowCount = (kButtonCount + kColsPerRow - 1) / kColsPerRow;  // 切り上げ除算
   static constexpr int kStatusBarHeight = 32;

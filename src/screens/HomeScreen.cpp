@@ -19,6 +19,12 @@ constexpr HomeButtonDef kButtonDefs[] = {
     {HomeScreen::GridButton::kRead, IconId::kImportContacts, "READ"},
     {HomeScreen::GridButton::kSettings, IconId::kSettings, "SETTINGS"},
     {HomeScreen::GridButton::kFolder, IconId::kFolder, "FOLDER"},
+    {HomeScreen::GridButton::kBluetooth, IconId::kBluetooth, "BLUETOOTH"},
+    // 専用アイコンは未作成のため、既存資産のkDarkMode(月アイコン)を待機/スリープの
+    // イメージとして流用する(scripts/convert_icons.pyの新規SVG追加は将来の課題)。
+    {HomeScreen::GridButton::kStandby, IconId::kDarkMode, "STANDBY"},
+    // 同上、kUpdate(更新アイコン)を自動更新される文書のイメージとして流用する。
+    {HomeScreen::GridButton::kLiveText, IconId::kUpdate, "LIVE TEXT"},
 };
 }  // namespace
 
@@ -133,7 +139,9 @@ ScreenAction HomeScreen::handleButton(uint8_t buttonIndex) {
   if (buttonIndex == InputManager::BTN_CONFIRM) {
     // フォルダ・設定はどちらもkNavigateForwardを返す。main.cpp側がlastActivatedButton()
     // を見てどちらの画面に遷移するか判断する。
-    if (lastActivatedButton() == GridButton::kFolder || lastActivatedButton() == GridButton::kSettings) {
+    if (lastActivatedButton() == GridButton::kFolder || lastActivatedButton() == GridButton::kSettings ||
+        lastActivatedButton() == GridButton::kBluetooth || lastActivatedButton() == GridButton::kStandby ||
+        lastActivatedButton() == GridButton::kLiveText) {
       return ScreenAction::kNavigateForward;
     }
     // READは直近に開いていた本があるときだけ機能する(なければ何もしない)。

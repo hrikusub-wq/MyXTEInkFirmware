@@ -94,7 +94,24 @@ class TxtReaderService {
             bool markdownMode = false, const Font* headingFont1 = nullptr, const Font* headingFont2 = nullptr,
             const Font* headingFont3 = nullptr, const Font* listFont = nullptr);
   void close();
-  bool isOpen() const { return fileOpen_; }
+
+  // ファイルハンドル(file_)だけを閉じる。ページインデックス・現在の表示内容
+  // (currentLines())・進捗等は保持したままなので、isOpen()やcurrentLines()は
+  // close()と違って引き続き有効なまま使える。LiveTextScreenのように「PCからの
+  // 上書きと同時に同じファイルを開いたままにしない」ことが必要な場面で使う
+  // (SDカードは同じファイルを読み書き両方のハンドルで同時に開けないため、開いた
+  // ままだと外部からの書き込みが失敗する)。
+  void closeFileHandle();
+  // closeFileHandle()で閉じたファイルハンドルを、同じpath()で再度開き直す。
+  // ページ送り等、実際にファイルへアクセスする操作の直前に呼ぶこと。失敗時は
+  // falseを返す(ファイルが削除された等)。isOpen()でない状態(そもそも一度も
+  // open()していない)で呼んでも失敗する。
+  bool reopenFileHandle();
+
+  // pathが設定されている(=open()に成功し、close()されていない)かどうか。
+  // closeFileHandle()でファイルハンドル自体が閉じられていてもtrueのまま
+  // (currentLines()等の表示内容は有効なため)。
+  bool isOpen() const { return path_.length() > 0; }
 
   const String& path() const { return path_; }
   int currentPage() const { return currentPage_; }

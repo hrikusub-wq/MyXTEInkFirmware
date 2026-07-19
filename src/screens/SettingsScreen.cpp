@@ -50,6 +50,11 @@ SettingsScreen::ItemKind SettingsScreen::kindForIndex(int index) {
     case 6: return ItemKind::kMarkdownMenu;
     case 7: return ItemKind::kReadOnly;
     case 8: return ItemKind::kAction;
+    case 9: return ItemKind::kNavigate;   // BLUETOOTH
+    case 10: return ItemKind::kNavigate;  // FOLDER SYNC
+    case 11: return ItemKind::kLongPress;
+    case 12: return ItemKind::kStandbyGamma;
+    case 13: return ItemKind::kNavigate;  // SYSTEM
     default: return ItemKind::kReadOnly;
   }
 }
@@ -65,6 +70,11 @@ const char* SettingsScreen::labelForIndex(int index) {
     case 6: return "MARKDOWN";
     case 7: return "BATTERY";
     case 8: return "CLEAR CACHE";
+    case 9: return "BLUETOOTH";
+    case 10: return "FOLDER SYNC";
+    case 11: return "LONG PRESS";
+    case 12: return "PHOTO GAMMA";
+    case 13: return "SYSTEM";
     default: return "";
   }
 }
@@ -90,6 +100,9 @@ void SettingsScreen::layoutRows(const Font& font) {
     rows_[i].setBounds(Rect{0, kStatusBarHeight + i * rowH, static_cast<int>(fbWidth_), rowH});
     rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kInvert);
   }
+  // BLUETOOTH/FOLDER SYNCのみ既存のアイコン資産を流用する(他の行は従来通りアイコンなし)。
+  rows_[9].setIcon(IconId::kBluetooth);
+  rows_[10].setIcon(IconId::kCloud);
 }
 
 void SettingsScreen::relayout(const Font& font) {
@@ -100,7 +113,7 @@ void SettingsScreen::relayout(const Font& font) {
 void SettingsScreen::refreshFontList() {
   availableCjkFonts_.clear();
   availableBinFonts_.clear();
-  for (const DirEntry& e : fileBrowser_.listDirectory("/fonts")) {
+  for (const DirEntry& e : fileBrowser_.listDirectory("/System/fonts")) {
     if (e.isDirectory) continue;
     String lower = e.name;
     lower.toLowerCase();
@@ -141,7 +154,7 @@ void SettingsScreen::scanFontSelectionForTarget(FontTarget target, SystemFontKin
   if (kind == SystemFontKind::kCjkFont) {
     const String currentPath = cjkPath;
     for (int i = 0; i < cjkCount; i++) {
-      if (String("/fonts/") + availableCjkFonts_[i] == currentPath) {
+      if (String("/System/fonts/") + availableCjkFonts_[i] == currentPath) {
         selection = i + 1;
         return;
       }
@@ -149,7 +162,7 @@ void SettingsScreen::scanFontSelectionForTarget(FontTarget target, SystemFontKin
   } else if (kind == SystemFontKind::kBinFont) {
     const String currentPath = binPath;
     for (size_t i = 0; i < availableBinFonts_.size(); i++) {
-      if (String("/fonts/") + availableBinFonts_[i].name == currentPath) {
+      if (String("/System/fonts/") + availableBinFonts_[i].name == currentPath) {
         selection = 1 + cjkCount + static_cast<int>(i);
         return;
       }
@@ -166,7 +179,7 @@ void SettingsScreen::scanMarkdownRoleSelections() {
     if (paths[role][0] == '\0') continue;
     const String currentPath = paths[role];
     for (size_t i = 0; i < availableBinFonts_.size(); i++) {
-      if (String("/fonts/") + availableBinFonts_[i].name == currentPath) {
+      if (String("/System/fonts/") + availableBinFonts_[i].name == currentPath) {
         mdRoleSelectionIndex_[role] = static_cast<int>(i) + 1;
         break;
       }
@@ -254,6 +267,20 @@ void SettingsScreen::refreshRowValues() {
       case ItemKind::kAction:
         rowValues_[i] = "CONFIRM";
         break;
+      case ItemKind::kLongPress: {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%ums", settings_.longPressMs);
+        rowValues_[i] = buf;
+        break;
+      }
+      case ItemKind::kStandbyGamma: {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%u%%", settings_.standbyGammaPercent);
+        rowValues_[i] = buf;
+        break;
+      }
+      case ItemKind::kNavigate:
+        break;  // BLUETOOTH/FOLDER SYNC/SYSTEMは遷移専用行で値表示なし(rowValues_[i]は前回のまま未使用)
     }
 
     rows_[i].setValue(rowValues_[i].c_str());
@@ -284,14 +311,14 @@ void SettingsScreen::commitFontSelection(FontTarget target) {
     binPathTarget[0] = '\0';
   } else if (selection <= cjkCount) {
     kind = SystemFontKind::kCjkFont;
-    const String path = "/fonts/" + availableCjkFonts_[selection - 1];
+    const String path = "/System/fonts/" + availableCjkFonts_[selection - 1];
     strncpy(cjkPathTarget, path.c_str(), pathSize - 1);
     cjkPathTarget[pathSize - 1] = '\0';
     binPathTarget[0] = '\0';
   } else {
     kind = SystemFontKind::kBinFont;
     const int binIdx = selection - 1 - cjkCount;
-    const String path = "/fonts/" + availableBinFonts_[binIdx].name;
+    const String path = "/System/fonts/" + availableBinFonts_[binIdx].name;
     strncpy(binPathTarget, path.c_str(), pathSize - 1);
     binPathTarget[pathSize - 1] = '\0';
     cjkPathTarget[0] = '\0';
@@ -338,7 +365,7 @@ void SettingsScreen::commitMarkdownRoleSelection(MarkdownRole role) {
   if (idx <= 0 || idx > static_cast<int>(availableBinFonts_.size())) {
     target[0] = '\0';
   } else {
-    const String path = "/fonts/" + availableBinFonts_[idx - 1].name;
+    const String path = "/System/fonts/" + availableBinFonts_[idx - 1].name;
     strncpy(target, path.c_str(), targetSize - 1);
     target[targetSize - 1] = '\0';
   }
@@ -445,6 +472,40 @@ void SettingsScreen::commitTimezoneEdit() {
   SettingsService::save(settings_);
 }
 
+void SettingsScreen::enterLongPressEdit() {
+  longPressDraft_ = settings_.longPressMs;
+  editingLongPress_ = true;
+}
+
+void SettingsScreen::adjustLongPressDraft(int delta) {
+  int v = static_cast<int>(longPressDraft_) + delta * 100;
+  if (v < 200) v = 200;
+  if (v > 1500) v = 1500;
+  longPressDraft_ = static_cast<uint16_t>(v);
+}
+
+void SettingsScreen::commitLongPressEdit() {
+  settings_.longPressMs = longPressDraft_;
+  SettingsService::save(settings_);
+}
+
+void SettingsScreen::enterStandbyGammaEdit() {
+  standbyGammaDraft_ = settings_.standbyGammaPercent;
+  editingStandbyGamma_ = true;
+}
+
+void SettingsScreen::adjustStandbyGammaDraft(int delta) {
+  int v = static_cast<int>(standbyGammaDraft_) + delta * 5;
+  if (v < 20) v = 20;
+  if (v > 100) v = 100;
+  standbyGammaDraft_ = static_cast<uint8_t>(v);
+}
+
+void SettingsScreen::commitStandbyGammaEdit() {
+  settings_.standbyGammaPercent = standbyGammaDraft_;
+  SettingsService::save(settings_);
+}
+
 void SettingsScreen::clearReaderCache() {
   for (const DirEntry& e : fileBrowser_.listDirectory("/.reader_cache")) {
     if (e.isDirectory) continue;
@@ -466,6 +527,10 @@ void SettingsScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, co
     drawMarkdownMenu(fb, fbWidth, fbHeight, font);
   } else if (editingTimezone_) {
     drawTimezoneEdit(fb, fbWidth, fbHeight, font);
+  } else if (editingLongPress_) {
+    drawLongPressEdit(fb, fbWidth, fbHeight, font);
+  } else if (editingStandbyGamma_) {
+    drawStandbyGammaEdit(fb, fbWidth, fbHeight, font);
   } else {
     // 電池残量・時刻など毎回変わりうる値を描画のたびに最新化する
     // (main.cppからの明示的なpushに頼らず、参照を持っているサービスから直接読む)。
@@ -588,6 +653,35 @@ void SettingsScreen::drawTimezoneEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fb
 
   font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH + 24, "LEFT/RIGHT=CHANGE (-9..+9)");
   font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH * 2 + 24, "CONFIRM=SAVE  BACK=CANCEL");
+}
+
+void SettingsScreen::drawLongPressEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
+  const int lineH = font.lineHeight();
+  const int titleY = kStatusBarHeight + 24;
+  font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET LONG PRESS TIME");
+
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%ums", longPressDraft_);
+  const int valueY = titleY + lineH + 16;
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY, buf);
+
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH + 24, "LEFT/RIGHT=CHANGE (200..1500)");
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH * 2 + 24, "CONFIRM=SAVE  BACK=CANCEL");
+}
+
+void SettingsScreen::drawStandbyGammaEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
+  const int lineH = font.lineHeight();
+  const int titleY = kStatusBarHeight + 24;
+  font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET PHOTO GAMMA");
+
+  char buf[8];
+  snprintf(buf, sizeof(buf), "%u%%", standbyGammaDraft_);
+  const int valueY = titleY + lineH + 16;
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY, buf);
+
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH + 24, "LEFT/RIGHT=CHANGE (20..100)");
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH * 2 + 24, "SMALLER=BRIGHTER");
+  font.drawText(fb, fbWidth, fbHeight, 16, valueY + lineH * 3 + 24, "CONFIRM=SAVE  BACK=CANCEL");
 }
 
 void SettingsScreen::drawClearCacheOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
@@ -740,6 +834,50 @@ ScreenAction SettingsScreen::handleButton(uint8_t buttonIndex) {
     return ScreenAction::kNone;
   }
 
+  if (editingLongPress_) {
+    if (buttonIndex == InputManager::BTN_LEFT || buttonIndex == InputManager::BTN_DOWN) {
+      adjustLongPressDraft(-1);
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_RIGHT || buttonIndex == InputManager::BTN_UP) {
+      adjustLongPressDraft(1);
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_CONFIRM) {
+      commitLongPressEdit();
+      editingLongPress_ = false;
+      refreshRowValues();
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_BACK) {
+      editingLongPress_ = false;  // 破棄
+      return ScreenAction::kRedraw;
+    }
+    return ScreenAction::kNone;
+  }
+
+  if (editingStandbyGamma_) {
+    if (buttonIndex == InputManager::BTN_LEFT || buttonIndex == InputManager::BTN_DOWN) {
+      adjustStandbyGammaDraft(-1);
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_RIGHT || buttonIndex == InputManager::BTN_UP) {
+      adjustStandbyGammaDraft(1);
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_CONFIRM) {
+      commitStandbyGammaEdit();
+      editingStandbyGamma_ = false;
+      refreshRowValues();
+      return ScreenAction::kRedraw;
+    }
+    if (buttonIndex == InputManager::BTN_BACK) {
+      editingStandbyGamma_ = false;  // 破棄
+      return ScreenAction::kRedraw;
+    }
+    return ScreenAction::kNone;
+  }
+
   // リスト内のフォーカス移動はLEFT/RIGHT・UP/DOWNのどちらでも同じ意味にする
   // (どちらの軸で操作しても迷わないように。値の変更・決定は必ずCONFIRM経由にする)。
   if (buttonIndex == InputManager::BTN_LEFT || buttonIndex == InputManager::BTN_UP) {
@@ -777,6 +915,14 @@ ScreenAction SettingsScreen::handleButton(uint8_t buttonIndex) {
         return ScreenAction::kRedraw;
       case ItemKind::kAction:
         showClearCacheConfirm_ = true;
+        return ScreenAction::kRedraw;
+      case ItemKind::kNavigate:
+        return ScreenAction::kNavigateForward;
+      case ItemKind::kLongPress:
+        enterLongPressEdit();
+        return ScreenAction::kRedraw;
+      case ItemKind::kStandbyGamma:
+        enterStandbyGammaEdit();
         return ScreenAction::kRedraw;
       default:
         return ScreenAction::kNone;

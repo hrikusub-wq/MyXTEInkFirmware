@@ -1,6 +1,7 @@
 #include "CjkFontImpl.h"
 
 #include <cstring>
+#include <new>
 #include <utility>
 
 #include "FrameBufferOps.h"
@@ -225,20 +226,67 @@ const CjkFontImpl::CachedGlyph* CjkFontImpl::fetchGlyph(uint32_t codepoint) cons
   const uint16_t dataLength = readU16(rec + 8);
   const uint32_t dataOffset = readU32(rec + 12);
 
-  if (dataLength > 0) {
-    g.bitmap.resize(dataLength);
-    if (!file_.seek(bitmapFileOffset_ + dataOffset) ||
-        file_.read(g.bitmap.data(), dataLength) != static_cast<int>(dataLength)) {
-      return nullptr;
+  // g.bitmap.resize()・cache_.push_back()はどちらもヒープ確保を伴う。この
+  // フォント描画パスは(measureText()/drawText()経由で)1文字ごとに頻繁に呼ばれる
+  // ため、待機画面のJPEG表示直後などヒープが逼迫している状況でも十分起こりうる。
+  // std::bad_allocを捕まえずに投げっぱなしにすると、この関数のどこかで例外が
+  // 発生した瞬間にキャッチする側が無い(このプロジェクトはtry/catchを使わない
+  // 設計)ためstd::terminate()→abort()でデバイス全体がクラッシュ・再起動して
+  // しまう不具合が実機で確認された。ここで捕まえて「このグリフは描画できない」
+  // という既存のnullptrフォールバック(呼び出し側は'?'へのフォールバック、または
+  // 半角スペース幅で読み飛ばす)に落とし込む。
+  //
+  // ヒープが尽きている間はキャッシュも育たず、同じ文字であっても呼ばれるたびに
+  // 毎回このtry/catchに落ちる。大量の文字を含むファイル(フォントテスト用等)では
+  // この状態が数百〜数千回連続することがあり、Serial.println()を毎回呼ぶと
+  // それ自体がボトルネックになって「フリーズしたように見えるほど遅くなる」
+  // 不具合が実機で確認された。ログは1回だけ出す。
+  try {
+    if (dataLength > 0) {
+      g.bitmap.resize(dataLength);
+      if (!file_.seek(bitmapFileOffset_ + dataOffset) ||
+          file_.read(g.bitmap.data(), dataLength) != static_cast<int>(dataLength)) {
+        return nullptr;
+      }
     }
-  }
 
-  if (cache_.size() >= kCacheCapacity) cache_.erase(cache_.begin());
-  cache_.push_back(std::move(g));
+    if (cache_.size() >= kCacheCapacity) cache_.erase(cache_.begin());
+    cache_.push_back(std::move(g));
+  } catch (const std::bad_alloc&) {
+    if (!loggedHeapExhausted_) {
+      loggedHeapExhausted_ = true;
+      if (Serial) Serial.println("[CJK] fetchGlyph: heap exhausted, skipping glyphs (further occurrences suppressed)");
+    }
+    return nullptr;
+  }
   return &cache_.back();
 }
 
 int CjkFontImpl::lineHeight() const { return advanceY_ > 0 ? advanceY_ : 1; }
+
+void CjkFontImpl::clearCache() const {
+  cache_.clear();
+  cache_.shrink_to_fit();
+  loggedHeapExhausted_ = false;  // 次のファイルでヒープが回復していれば再度ログしてよい
+}
+
+namespace {
+bool isAsciiPrintable(uint32_t cp) { return cp >= 0x20 && cp <= 0x7E; }
+}  // namespace
+
+int32_t CjkFontImpl::asciiAdvanceFp(uint32_t codepoint, const CachedGlyph& g) const {
+  const int lineH = lineHeight();
+  if (codepoint == ' ' || g.width == 0) {
+    // スペースや(未収録などで)インクを持たないグリフは実幅から逆算できないため、
+    // 行の高さから概算した固定幅にフォールバックする。
+    return fp4FromPixel(lineH / 4 > 0 ? lineH / 4 : 1);
+  }
+  // ペン開始位置(left)からグリフ右端(left+width)までを実際のインク幅とみなし、
+  // 文字間の隙間として1pxだけ足す。
+  const int inkRight = g.left + static_cast<int>(g.width);
+  const int advancePx = inkRight > 0 ? inkRight + 1 : (lineH / 3 > 0 ? lineH / 3 : 1);
+  return fp4FromPixel(advancePx);
+}
 
 int CjkFontImpl::measureText(const char* utf8Text) const {
   if (!ready_) return 0;
@@ -252,7 +300,7 @@ int CjkFontImpl::measureText(const char* utf8Text) const {
       cursorFP += fp4FromPixel(lineHeight() / 2);
       continue;
     }
-    cursorFP += g->advanceX;
+    cursorFP += isAsciiPrintable(cp) ? asciiAdvanceFp(cp, *g) : g->advanceX;
   }
   return fp4ToPixel(cursorFP);
 }
@@ -289,6 +337,6 @@ void CjkFontImpl::drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int
       }
     }
 
-    cursorFP += g->advanceX;
+    cursorFP += isAsciiPrintable(cp) ? asciiAdvanceFp(cp, *g) : g->advanceX;
   }
 }

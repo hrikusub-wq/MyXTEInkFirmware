@@ -45,6 +45,8 @@ class XteinkBinFontImpl : public Font {
   int lineHeight() const override;
   void drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                 int x, int y, const char* utf8Text) const override;
+  // CjkFontImpl::clearCache()と同じ理由(Font.h参照)。
+  void clearCache() const override;
 
  private:
   struct CachedGlyph {
@@ -63,4 +65,7 @@ class XteinkBinFontImpl : public Font {
 
   static constexpr size_t kCacheCapacity = 64;
   mutable std::vector<CachedGlyph> cache_;
+  // ヒープ逼迫でグリフ確保に失敗した旨のログを1回だけに抑える(CjkFontImpl.hの
+  // 同種のコメント参照)。
+  mutable bool loggedHeapExhausted_ = false;
 };

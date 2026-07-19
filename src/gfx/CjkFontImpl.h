@@ -35,6 +35,10 @@ class CjkFontImpl : public Font {
   int lineHeight() const override;
   void drawText(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                 int x, int y, const char* utf8Text) const override;
+  // cache_を空にし、std::vectorの内部バッファ容量もshrink_to_fit()でヒープへ
+  // 返す(clear()だけでは容量が保持されたままになる、Font.hのコメント参照)。
+  // 読書中のファイル切り替え時にTxtReaderService::close()経由で呼ばれる。
+  void clearCache() const override;
 
  private:
   // .cpfontのグリフレコード(ファイル上16バイト、区間テーブルの1件と対応)。
@@ -64,6 +68,14 @@ class CjkFontImpl : public Font {
   // GfxRendererの同種のコメントを参考にした)。
   const CachedGlyph* fetchGlyph(uint32_t codepoint) const;
 
+  // ASCII(半角英数字・記号、0x20-0x7E)の字送り幅(12.4固定小数点)を計算する。
+  // .cpfontのadvanceXはCJK(全角)前提で作られているものが多く、そのまま使うと
+  // 半角のはずの英数字が全角相当の幅に間延びして表示される(実機で確認済み)。
+  // ビットマップ自体(g.width/left/top)は変更せず見た目のグリフ形状はそのまま、
+  // カーソルの送り幅だけをグリフの実際のインク幅基準に計算し直す。
+  // measureText/drawTextの両方から呼び、折り返し計算と実描画の幅がずれないようにする。
+  int32_t asciiAdvanceFp(uint32_t codepoint, const CachedGlyph& g) const;
+
   bool ready_ = false;
   mutable FsFile file_;
 
@@ -75,4 +87,8 @@ class CjkFontImpl : public Font {
 
   static constexpr size_t kCacheCapacity = 200;
   mutable std::vector<CachedGlyph> cache_;
+  // ヒープ逼迫でグリフ確保に失敗した旨のログは、文字ごとに何度も出すと(特に
+  // 大量の文字を含むファイルで)Serial出力自体が重く体感の「フリーズ」を
+  // 悪化させるため、1回だけ出す(fetchGlyph()参照)。
+  mutable bool loggedHeapExhausted_ = false;
 };

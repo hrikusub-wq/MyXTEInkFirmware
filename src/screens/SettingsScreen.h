@@ -24,7 +24,7 @@
 //   BACKでキャンセル。RTCの生値は変更せず、表示・TIME編集時の変換にのみ使う。
 // - CLOCK IN STATUS BAR: CONFIRMでON/OFF切り替え
 // - SYSTEM FONT / BOOK FONT: CONFIRMで一覧から選ぶ別ウィンドウ(フォントピッカー、
-//   LEFT/RIGHT・UP/DOWNどちらでもフォーカス移動)を開く。一覧は"/fonts"直下の
+//   LEFT/RIGHT・UP/DOWNどちらでもフォーカス移動)を開く。一覧は"/System/fonts"直下の
 //   MINIFONT(内蔵)・*.cpfont(CjkFontImpl)・*.bin(XteinkBinFontImpl)を並べたもので、
 //   両項目で共有する(FontTarget参照)。SYSTEM FONTはUIチローム全体、BOOK FONTは
 //   読書画面の本文のみに反映される、互いに独立した設定(main.cpp側が
@@ -43,6 +43,19 @@
 //   「OFF」(本文と同じフォントで代用、太字は記号除去のみ)。
 // - BATTERY: 読み取り専用(残量%・電圧)
 // - CLEAR CACHE: CONFIRMで確認オーバーレイ、再度CONFIRMで/.reader_cache/を削除
+// - BLUETOOTH: CONFIRMでBluetoothScreenへ遷移(値の変更は伴わない、ItemKind::kNavigate)
+// - FOLDER SYNC: CONFIRMでFolderSyncScreenへ遷移(同上)
+// - LONG PRESS: CONFIRMで長押し判定時間の編集モード(別ウィンドウ)に入る。
+//   LEFT/RIGHT(またはUP/DOWN)で200〜1500msの範囲を100ms刻みで変更、CONFIRMで保存、
+//   BACKでキャンセル(TIMEZONEと同じ操作体系)。側面ボタン(UP/DOWN)長押しでの
+//   CONFIRM/BACKショートカット判定(main.cpp)に使われる。
+// - PHOTO GAMMA: CONFIRMでガンマ補正値の編集モード(別ウィンドウ)に入る。
+//   LEFT/RIGHT(またはUP/DOWN)で20〜100%の範囲を5%刻みで変更、CONFIRMで保存、
+//   BACKでキャンセル(LONG PRESSと同じ操作体系)。StandbyScreenのJPEG(4階調
+//   グレースケール)表示で使う輝度補正の強さ。値が小さいほど明るい。
+// - SYSTEM: CONFIRMでFolderScreenへ遷移するが、ルートを"/System"にして開く点が
+//   ホーム画面の「FOLDER」("/User"を開く)と異なる(同上、ItemKind::kNavigate)。
+//   フォント等の機材データを置く場所で、日常的にはほぼ開かない想定。
 // - BACK: ホーム画面に戻る
 //
 // 設定はSettingsService経由でSDへ即時保存する(TxtReaderServiceの進捗保存と同じ
@@ -59,7 +72,7 @@ class SettingsScreen : public Screen {
   // 自分自身の行の高さもフォントのlineHeight()に依存するため)。
   void relayout(const Font& font);
 
-  // SDカードの"/fonts"を再スキャンして選択可能な.cpfont一覧を更新する。
+  // SDカードの"/System/fonts"を再スキャンして選択可能な.cpfont一覧を更新する。
   // コンストラクタはグローバルオブジェクトとしてsetup()より前(SDカード初期化前)に
   // 呼ばれるため、SDアクセスを伴うこの処理はコンストラクタに含めず、main.cpp側が
   // fileBrowser.begin()成功後に明示的に呼ぶ。
@@ -72,8 +85,32 @@ class SettingsScreen : public Screen {
   void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
   void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
 
+  // BLUETOOTH/FOLDER SYNC/SYSTEM行(いずれもItemKind::kNavigate)のどれが
+  // CONFIRMされScreenAction::kNavigateForwardが返ったかをmain.cpp側に伝える
+  // (HomeScreen::lastActivatedButton()と同じ考え方)。
+  enum class NavigateTarget { kBluetooth, kFolderSync, kSystemFolder };
+  NavigateTarget lastNavigateTarget() const {
+    if (focusIndex_ == 10) return NavigateTarget::kFolderSync;
+    if (focusIndex_ == 13) return NavigateTarget::kSystemFolder;
+    return NavigateTarget::kBluetooth;
+  }
+
  private:
-  enum class ItemKind { kClock, kTimezone, kToggle, kFontCycle, kScaleCycle, kMarkdownMenu, kReadOnly, kAction };
+  // kNavigate: 値の変更を伴わず、CONFIRMで別画面へ遷移するだけの項目
+  // (BLUETOOTH/FOLDER SYNC)。
+  enum class ItemKind {
+    kClock,
+    kTimezone,
+    kToggle,
+    kFontCycle,
+    kScaleCycle,
+    kMarkdownMenu,
+    kReadOnly,
+    kAction,
+    kNavigate,
+    kLongPress,
+    kStandbyGamma,
+  };
 
   // SYSTEM FONT/BOOK FONTはフォントピッカーの仕組み(一覧・選択状態)を共有するが、
   // 反映先のAppSettingsフィールドが異なるため、どちらの操作かを区別するのに使う。
@@ -85,9 +122,9 @@ class SettingsScreen : public Screen {
   enum class MarkdownRole { kHeading1 = 0, kHeading2 = 1, kHeading3 = 2, kList = 3, kBold = 4 };
   static constexpr int kMarkdownRoleCount = 5;
 
-  // "/fonts"直下の*.binのうち、ファイル名から幅・高さを解析できたものだけを一覧化する。
+  // "/System/fonts"直下の*.binのうち、ファイル名から幅・高さを解析できたものだけを一覧化する。
   struct BinFontEntry {
-    String name;  // ファイル名のみ("/fonts/"は含まない)
+    String name;  // ファイル名のみ("/System/fonts/"は含まない)
     int width = 0;
     int height = 0;
   };
@@ -95,7 +132,7 @@ class SettingsScreen : public Screen {
   static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
   static constexpr int kRowPadding = 10;
-  static constexpr int kItemCount = 9;
+  static constexpr int kItemCount = 14;
 
   static ItemKind kindForIndex(int index);
   static const char* labelForIndex(int index);
@@ -123,12 +160,20 @@ class SettingsScreen : public Screen {
   void enterTimezoneEdit();
   void adjustTimezoneDraft(int delta);
   void commitTimezoneEdit();
+  void enterLongPressEdit();
+  void adjustLongPressDraft(int delta);
+  void commitLongPressEdit();
+  void enterStandbyGammaEdit();
+  void adjustStandbyGammaDraft(int delta);
+  void commitStandbyGammaEdit();
   void clearReaderCache();
   void drawClockEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawMarkdownMenu(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawMarkdownFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawTimezoneEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
+  void drawLongPressEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
+  void drawStandbyGammaEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
   void drawClearCacheOverlay(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
 
   RtcService& rtc_;
@@ -139,8 +184,8 @@ class SettingsScreen : public Screen {
   uint16_t fbWidth_;
   uint16_t fbHeight_;
 
-  std::vector<String> availableCjkFonts_;      // "/fonts"直下の*.cpfont(ファイル名のみ)
-  std::vector<BinFontEntry> availableBinFonts_;  // "/fonts"直下の*.bin(解析済み幅高さ付き)
+  std::vector<String> availableCjkFonts_;      // "/System/fonts"直下の*.cpfont(ファイル名のみ)
+  std::vector<BinFontEntry> availableBinFonts_;  // "/System/fonts"直下の*.bin(解析済み幅高さ付き)
   // fontSelectionIndex_[target]: 0=MiniFont、1..M=cpfont、M+1..M+N=bin
   int fontSelectionIndex_[kFontTargetCount] = {0, 0};
   bool fontSettingsChanged_ = false;
@@ -167,6 +212,12 @@ class SettingsScreen : public Screen {
 
   bool editingTimezone_ = false;
   int8_t timezoneDraft_ = 0;
+
+  bool editingLongPress_ = false;
+  uint16_t longPressDraft_ = 500;
+
+  bool editingStandbyGamma_ = false;
+  uint8_t standbyGammaDraft_ = 35;
 
   bool showClearCacheConfirm_ = false;
 
