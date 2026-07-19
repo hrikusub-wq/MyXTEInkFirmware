@@ -36,10 +36,23 @@ bool ensureDirPathExists(const String& dirPath) {
 }  // namespace
 
 bool BleTransferService::begin() {
+  // デバイス名の計算だけを行い、NimBLEDevice::init()(BTコントローラ+ホストスタック
+  // 一式の初期化)はここでは呼ばない。NimBLEの初期化はESP32-C3のヒープを恒常的に
+  // 数十KB規模で消費する(一度確保すると本来的なdeinitを行わない限り解放されない)ため、
+  // setup()で常に呼んでしまうとBluetooth/FolderSync/LiveTextを一度も開かないセッションでも
+  // TXT/Markdown読書用のヒープ予算を常に圧迫してしまう(ヒープ逼迫でファイルが開けない
+  // 不具合の主因の1つだった)。実際のスタック初期化はensureStackReady()に切り出し、
+  // 最初にstartAdvertising()が呼ばれた時点(=ユーザーが実際にBluetooth系の画面を
+  // 開いた時点)まで遅延させる。
   char nameBuf[24];
   const uint64_t chipId = ESP.getEfuseMac();
   snprintf(nameBuf, sizeof(nameBuf), "XteinkX3-%04X", static_cast<unsigned>(chipId & 0xFFFFu));
   deviceName_ = nameBuf;
+  return true;
+}
+
+void BleTransferService::ensureStackReady() {
+  if (server_) return;  // 2回目以降の呼び出しは何もしない(初回のみ初期化)
 
   NimBLEDevice::init(deviceName_.c_str());
   NimBLEDevice::setMTU(517);
@@ -71,10 +84,11 @@ bool BleTransferService::begin() {
   advertising->enableScanResponse(true);
   advertising->setName(deviceName_.c_str());
 
-  return true;
+  if (Serial) Serial.printf("[BLE] stack initialized on first use (free heap=%u)\n", ESP.getFreeHeap());
 }
 
 void BleTransferService::startAdvertising() {
+  ensureStackReady();
   wantAdvertising_ = true;
   NimBLEDevice::getAdvertising()->start();
 }

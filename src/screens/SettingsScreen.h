@@ -8,7 +8,6 @@
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
 #include "../ui/SettingRow.h"
-#include "../ui/StatusBar.h"
 
 // 設定画面。項目は固定のリストで、LEFT/RIGHT・UP/DOWNのどちらでもフォーカス移動
 // できる(冗長だが同じ意味。TxtReaderScreenのLEFT/UP=前ページ・RIGHT/DOWN=次ページと
@@ -82,8 +81,7 @@ class SettingsScreen : public Screen {
   // (main.cpp側が実際のフォント差し替え・他画面のrelayout()を行うためのフラグ)。
   bool consumeFontSettingsChanged();
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // StatusBar removed in Phase C
 
   // BLUETOOTH/FOLDER SYNC/SYSTEM行(いずれもItemKind::kNavigate)のどれが
   // CONFIRMされScreenAction::kNavigateForwardが返ったかをmain.cpp側に伝える
@@ -129,9 +127,10 @@ class SettingsScreen : public Screen {
     int height = 0;
   };
 
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
-  static constexpr int kRowPadding = 10;
+  // 「リストの視認性を上げてほしい」というフィードバックを受けて拡大(以前は10、
+  // FolderScreen.hのkRowPaddingコメント参照)。
+  static constexpr int kRowPadding = 30;
   static constexpr int kItemCount = 14;
 
   static ItemKind kindForIndex(int index);
@@ -221,7 +220,6 @@ class SettingsScreen : public Screen {
 
   bool showClearCacheConfirm_ = false;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[4];
 

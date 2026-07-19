@@ -5,7 +5,7 @@
 #include "../core/TxtReaderService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
-#include "../ui/StatusBar.h"
+#include "../ui/SettingRow.h"
 
 // PC側からのBLE経由での上書きに追従して自動的に再表示する、常に単一の固定
 // パス(kDefaultPath)だけを扱う一時ファイルビューア。ホーム画面の「LIVE TEXT」
@@ -73,11 +73,7 @@ class LiveTextScreen : public Screen {
   // 判定に使う)。
   bool consumeNeedsFullRefresh();
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
-
  private:
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
   static constexpr int kContentMargin = 16;
   // 短時間の連続更新をまとめるためのデバウンス時間。PCエディタのオートセーブが
@@ -108,7 +104,6 @@ class LiveTextScreen : public Screen {
   uint16_t fbWidth_;
   uint16_t fbHeight_;
   TxtReaderService reader_;
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[1];
   char pageLabel_[16] = "1/1";

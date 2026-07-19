@@ -46,9 +46,7 @@ FolderScreen::FolderScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font
     : fileBrowser_(fileBrowser),
       fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  statusBar_.setBatteryPercent(87);
 
   // UP/DOWN(リストのフォーカス移動、LEFT/RIGHTと同じ意味)は側面ボタンのため
   // フッターには表示できない。
@@ -65,15 +63,15 @@ FolderScreen::FolderScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font
 
 void FolderScreen::layoutRows(const Font& font) {
   const int rowH = RowHeight(font);
-  const int listHeight = static_cast<int>(fbHeight_) - kStatusBarHeight - kFooterHeight;
+  const int listHeight = static_cast<int>(fbHeight_) - kFooterHeight;
   int n = listHeight / rowH;
   if (n < 1) n = 1;
   if (n > kMaxVisibleRows) n = kMaxVisibleRows;
   rowsPerPage_ = n;
 
   for (int i = 0; i < kMaxVisibleRows; i++) {
-    rows_[i].setBounds(Rect{0, kStatusBarHeight + i * rowH, static_cast<int>(fbWidth_), rowH});
-    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    rows_[i].setBounds(Rect{0, i * rowH, static_cast<int>(fbWidth_), rowH});
+    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   }
 }
 
@@ -127,8 +125,6 @@ void FolderScreen::reloadRowWindowForFocus() {
 }
 
 void FolderScreen::updateFooter() {
-  statusBar_.setLeftText(currentPath_.c_str());
-
   const int total = static_cast<int>(entries_.size());
   const int totalPages = total == 0 ? 1 : (total + rowsPerPage_ - 1) / rowsPerPage_;
   const int currentPage = (focusIndex_ / rowsPerPage_) + 1;
@@ -158,10 +154,8 @@ void FolderScreen::goToParent() {
 }
 
 void FolderScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
-
   if (entries_.empty()) {
-    font.drawText(fb, fbWidth, fbHeight, 16, kStatusBarHeight + 20, "(EMPTY)");
+    font.drawText(fb, fbWidth, fbHeight, 16, 20, "(EMPTY)");
   } else {
     for (int i = 0; i < visibleRowCount_; i++) {
       rows_[i].render(fb, fbWidth, fbHeight, font);

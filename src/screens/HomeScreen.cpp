@@ -3,6 +3,7 @@
 #include <InputManager.h>
 
 #include "../gfx/FrameBufferOps.h"
+#include "../ui/BatteryDateOverlay.h"
 
 namespace {
 struct HomeButtonDef {
@@ -28,13 +29,14 @@ constexpr HomeButtonDef kButtonDefs[] = {
 };
 }  // namespace
 
-HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
-    : statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
+HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, BatteryService& battery, RtcService& rtc, AppSettings& appSettings)
+    : battery_(battery),
+      rtc_(rtc),
+      appSettings_(appSettings),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   static_assert(sizeof(kButtonDefs) / sizeof(kButtonDefs[0]) == kButtonCount,
                 "kButtonDefs[]の要素数とkButtonCountを一致させてください");
   (void)font;  // ボタン行の高さは固定px(kButtonRowHeight)で決め打ちのため未使用
-  statusBar_.setBatteryPercent(87);
 
   // UP/DOWN(グリッドの縦移動)は側面ボタンのためフッターには表示できない。
   // LEFT/RIGHTは同じ"MOVE"だと見分けがつかないため、矢印アイコンで向きを示す。
@@ -62,10 +64,7 @@ HomeScreen::HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
   updateFocus();
 }
 
-void HomeScreen::setClockText(const char* text) {
-  clockText_ = text;
-  statusBar_.setLeftText(clockText_.c_str());
-}
+// setClockText removed
 
 void HomeScreen::setLastBook(const String& path, int percent) {
   lastBookPath_ = path;
@@ -86,7 +85,7 @@ void HomeScreen::drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbH
   const int iconW = 90;
   const int iconH = kBookAreaHeight - margin * 2;
   const int iconX = margin;
-  const int iconY = kStatusBarHeight + margin;
+  const int iconY = margin + 16;
 
   // 本のプレースホルダーアイコン: 表紙の矩形+背表紙の縦線
   FrameBufferOps::drawRectOutline(fb, fbWidth, fbHeight, iconX, iconY, iconW, iconH, 2);
@@ -112,12 +111,21 @@ void HomeScreen::drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbH
 }
 
 void HomeScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
+  // statusBar_.render removed
   drawBookPlaceholder(fb, fbWidth, fbHeight, font);
   for (auto& button : buttons_) {
     button.render(fb, fbWidth, fbHeight, font);
   }
   footer_.render(fb, fbWidth, fbHeight, font);
+
+  RtcDateTime dt;
+  RtcDateTime localDt;
+  const RtcDateTime* pDt = nullptr;
+  if (appSettings_.rtcEnabled && rtc_.ready() && rtc_.readDateTime(dt)) {
+    localDt = addHoursToDateTime(dt, appSettings_.timezoneOffsetHours);
+    pDt = &localDt;
+  }
+  BatteryDateOverlay::drawBatteryAndDate(fb, fbWidth, fbHeight, font, static_cast<int>(fbWidth) - 16, 16, battery_.readPercent(), battery_.isCharging(), pDt, false, true);
 }
 
 ScreenAction HomeScreen::handleButton(uint8_t buttonIndex) {

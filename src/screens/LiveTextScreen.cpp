@@ -7,7 +7,6 @@ LiveTextScreen::LiveTextScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& 
       font_(&font),
       fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   footerItems_[0] = {PhysicalButton::kBack, "CLOSE"};
   footer_.setItems(footerItems_, 1);
@@ -17,7 +16,7 @@ LiveTextScreen::LiveTextScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& 
 }
 
 void LiveTextScreen::layout() {
-  contentTop_ = kStatusBarHeight + kContentMargin;
+  contentTop_ = kContentMargin;
   viewportWidthPx_ = static_cast<int>(fbWidth_) - kContentMargin * 2;
   const int contentBottom = static_cast<int>(fbHeight_) - kFooterHeight - kContentMargin;
   viewportHeightPx_ = contentBottom - contentTop_;
@@ -62,7 +61,6 @@ void LiveTextScreen::closeFile() {
 }
 
 void LiveTextScreen::updateStatusAndFooter() {
-  statusBar_.setLeftText(titleText_.c_str());
   snprintf(pageLabel_, sizeof(pageLabel_), "%d/%d", reader_.currentPage() + 1, reader_.totalPages());
 }
 
@@ -126,7 +124,7 @@ void LiveTextScreen::drawContent(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeigh
 }
 
 void LiveTextScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
+  // statusBar rendering removed
   drawContent(fb, fbWidth, fbHeight);
   footer_.render(fb, fbWidth, fbHeight, font);
 }

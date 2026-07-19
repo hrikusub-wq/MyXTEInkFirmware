@@ -4,11 +4,9 @@
 
 BluetoothScreen::BluetoothScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, BleTransferService& ble)
     : ble_(ble),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   (void)font;
-  statusBar_.setLeftText("BLUETOOTH");
-  footerItems_[0] = {PhysicalButton::kBack, "SETTINGS"};
+  footerItems_[0] = {PhysicalButton::kBack, "BACK"};
   footer_.setItems(footerItems_, 1);
 }
 
@@ -44,11 +42,10 @@ bool BluetoothScreen::pollUpdates() {
 }
 
 void BluetoothScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
 
   const int lineH = font.lineHeight();
   const int textX = 16;
-  int y = kStatusBarHeight + 24;
+  int y = 24;
 
   if (ble_.state() == BleTransferService::State::kError) {
     font.drawText(fb, fbWidth, fbHeight, textX, y, "ERROR");

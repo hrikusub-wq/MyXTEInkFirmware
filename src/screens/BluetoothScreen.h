@@ -2,7 +2,7 @@
 #include "../core/BleTransferService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
-#include "../ui/StatusBar.h"
+#include "../ui/SettingRow.h"
 
 // Bluetooth(BLE)画面。SettingsScreenの「BLUETOOTH」から開く。
 //
@@ -31,11 +31,9 @@ class BluetoothScreen : public Screen {
   // (呼び出し側はtrueのときだけ再描画すればよい)。
   bool pollUpdates();
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // setBatteryPercent/setBatteryCharging removed
 
  private:
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
 
   BleTransferService& ble_;
@@ -46,7 +44,6 @@ class BluetoothScreen : public Screen {
   String cachedFileName_;
   uint32_t cachedReceivedBytes_ = 0;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[1];
 };

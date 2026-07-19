@@ -4,14 +4,17 @@
 #include "../gfx/Icon.h"
 
 // 2カラム設定行(左:ラベル、右:現在値)。設定画面・読書中メニュー・フォルダ画面の
-// 一覧表示で使う共通コンポーネント。選択中は枠線または背景反転で強調する
-// (SelectionStyleで切替)。setIcon()を呼んだ場合、ラベルの前に24pxアイコンを表示する
-// (フォルダ画面のファイル/フォルダ種別アイコン用。呼ばなければ従来通りアイコンなし)。
+// 一覧表示で使う共通コンポーネント。選択中は枠線または薄いグレーのドット背景で
+// 強調する(SelectionStyleで切替)。setIcon()を呼んだ場合、ラベルの前に24pxアイコンを
+// 表示する(フォルダ画面のファイル/フォルダ種別アイコン用。呼ばなければ従来通り
+// アイコンなし)。
 class SettingRow : public Widget {
  public:
   enum class SelectionStyle {
-    kOutline,  // 角丸枠線(実装簡略化のため直角枠)
-    kInvert,   // 背景反転(黒地に白文字)
+    kOutline,        // 角丸枠線(実装簡略化のため直角枠)
+    kGrayHighlight,  // 薄いグレーのドットパターン背景(黒文字はそのまま)。以前は
+                     // 黒背景反転だったが、選択の主張が強すぎたためグレーに変更した
+                     // (FrameBufferOps::fillRectLightGrayDither()参照)。
   };
 
   // デフォルト構築(可変長リストでの配列確保用)。setBounds/setLabel/setValueで
@@ -32,6 +35,11 @@ class SettingRow : public Widget {
   const Rect& bounds() const { return bounds_; }
 
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const override;
+
+  // アイコン付き行の描画サイズ(SettingRow.cpp参照)。一覧画面側がkIconPxを含めた
+  // 行の高さ(font.lineHeight()とkIconPxの大きい方+パディング)を計算する際に
+  // 参照できるよう公開している(FolderScreen::RowHeight()等参照)。
+  static constexpr int kIconPx = static_cast<int>(IconSize::kLarge);
 
  private:
   Rect bounds_;

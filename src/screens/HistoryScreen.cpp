@@ -5,9 +5,7 @@
 HistoryScreen::HistoryScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font)
     : fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  statusBar_.setLeftText("HISTORY");
 
   // UP/DOWNは側面ボタンのためフッターには表示できない。
   footerItems_[0] = {PhysicalButton::kBack, "HOME"};
@@ -20,10 +18,13 @@ HistoryScreen::HistoryScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& fo
 }
 
 void HistoryScreen::layoutRows(const Font& font) {
-  const int rowH = font.lineHeight() + kRowPadding;
+  // アイコン(SettingRow::kIconPx)が小さいフォントサイズ設定でもはみ出さないよう、
+  // 行高さはフォントの行高さとアイコンサイズの大きい方を基準にする
+  // (FolderScreen::RowHeight()と同じ考え方)。
+  const int rowH = std::max(font.lineHeight(), SettingRow::kIconPx) + kRowPadding;
   for (int i = 0; i < kMaxRows; i++) {
-    rows_[i].setBounds(Rect{0, kStatusBarHeight + i * rowH, static_cast<int>(fbWidth_), rowH});
-    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    rows_[i].setBounds(Rect{0, i * rowH, static_cast<int>(fbWidth_), rowH});
+    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   }
 }
 
@@ -55,11 +56,9 @@ void HistoryScreen::refreshRowLabels() {
 }
 
 void HistoryScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
-
   const int total = static_cast<int>(entries_.size());
   if (total == 0) {
-    font.drawText(fb, fbWidth, fbHeight, 16, kStatusBarHeight + 20, "(NO HISTORY YET)");
+    font.drawText(fb, fbWidth, fbHeight, 16, 20, "(NO HISTORY YET)");
   } else {
     for (int i = 0; i < total; i++) rows_[i].render(fb, fbWidth, fbHeight, font);
   }

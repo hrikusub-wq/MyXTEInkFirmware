@@ -116,6 +116,13 @@ class BleTransferService {
   // 1回のLS:応答で列挙する最大エントリ数(応答時間・BLE帯域の安全上限)。
   static constexpr int kMaxListEntries = 200;
 
+  // NimBLEDevice::init()(GATTサーバー・サービス・キャラクタリスティック構築を含む)は
+  // ヒープを恒常的に(数十KB規模)消費するため、begin()では行わずstartAdvertising()から
+  // 初回のみ呼ぶ(server_ != nullptrなら以降は何もしない)。Bluetooth/FolderSync/
+  // LiveTextのいずれの画面も一度も開かなければ、この分のヒープはTXT/Markdown読書用に
+  // 残ったままになる(BleTransferService.cppのbegin()コメント参照)。
+  void ensureStackReady();
+
   void enqueueControlCommand(const uint8_t* data, size_t len);
   void enqueueDataChunk(const uint8_t* data, size_t len);
   void processControlCommand(const char* cmd);

@@ -3,7 +3,7 @@
 #include "../core/TxtReaderService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
-#include "../ui/StatusBar.h"
+// StatusBar dependency removed
 
 // TXT/Markdownファイルを表示する読書画面。表示モードは2種類(TxtReaderService::
 // ReadMode参照):
@@ -99,11 +99,9 @@ class TxtReaderScreen : public Screen {
   // その場合は特別処理を無効にする)。
   bool isOverlayShown() const { return editingScrollLines_ || showReadingSettings_ || showBookmarkList_; }
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // StatusBar methods removed
 
  private:
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
   static constexpr int kContentMargin = 16;
   // READING SETTINGSオーバーレイの項目数(0=MODE、1=SCROLL LINES、2=BOOKMARKS)。
@@ -142,7 +140,6 @@ class TxtReaderScreen : public Screen {
   uint16_t fbWidth_;
   uint16_t fbHeight_;
   TxtReaderService reader_;
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[3];
   char pageLabel_[16] = "1/1";

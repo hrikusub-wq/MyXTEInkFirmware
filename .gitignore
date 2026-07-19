@@ -3,3 +3,9 @@
 
 # ローカルクローンで利用(README参照)。gitでは追跡しない
 open-x4-sdk/
+
+# Antigravity(外部AIツール)の作業報告書。リポジトリの履歴としては不要。
+Antigravity/
+
+# シリアルモニタのデバッグログ(一時的な採取物)。
+logs/

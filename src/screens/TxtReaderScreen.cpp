@@ -52,7 +52,6 @@ TxtReaderScreen::TxtReaderScreen(uint16_t fbWidth, uint16_t fbHeight, const Font
       settings_(settings),
       fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   // UP/DOWN(前/次ページ、または数行戻る/進む)は側面ボタンのためフッターには
   // 表示できない。RIGHTは未使用のためフッターに項目を出さない(空スロットになる)。
@@ -73,7 +72,7 @@ void TxtReaderScreen::layout(const Font& /*contentFont*/) {
   // viewportHeightPxコメント参照)。ここでは純粋にピクセル領域の高さだけを渡し、
   // ページ区切りの計算自体はTxtReaderService側で行ごとの実際のlineHeight()を
   // 積算しながら行う。
-  contentTop_ = kStatusBarHeight + kContentMargin;
+  contentTop_ = kContentMargin;
   viewportWidthPx_ = static_cast<int>(fbWidth_) - kContentMargin * 2;
   const int contentBottom = static_cast<int>(fbHeight_) - kFooterHeight - kContentMargin;
   viewportHeightPx_ = contentBottom - contentTop_;
@@ -109,6 +108,10 @@ bool TxtReaderScreen::openFile(const String& path) {
     return false;
   }
 
+  if (!reader_.isOpen()) {
+    titleText_ = "";
+    return false;
+  }
   const int lastSlash = path.lastIndexOf('/');
   titleText_ = (lastSlash >= 0) ? path.substring(lastSlash + 1) : path;
   showReadingSettings_ = false;
@@ -120,7 +123,6 @@ bool TxtReaderScreen::openFile(const String& path) {
 }
 
 void TxtReaderScreen::updateStatusAndFooter() {
-  statusBar_.setLeftText(titleText_.c_str());
   const bool scrolling = reader_.readMode() == TxtReaderService::ReadMode::kScroll;
   if (scrolling) {
     // SCROLL中はページ番号という概念が無いため、ファイル内の読了位置(%)を出す。
@@ -166,7 +168,7 @@ void TxtReaderScreen::addBookmark() {
 void TxtReaderScreen::openBookmarkList() { enterBookmarkList(); }
 
 void TxtReaderScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
+  // StatusBar rendering removed
 
   const Font& body = contentFont();
   const Font& list = listFont();
@@ -238,14 +240,14 @@ void TxtReaderScreen::drawReadingSettingsOverlay(uint8_t* fb, uint16_t fbWidth, 
   const int listTop = textY + lineH + 12;
 
   SettingRow modeRow(Rect{boxX + 16, listTop, boxW - 32, rowH}, "MODE", scrolling ? "縦(SCROLL)" : "横(PAGE)");
-  modeRow.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+  modeRow.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   modeRow.setSelected(readingSettingsFocus_ == 0);
   modeRow.render(fb, fbWidth, fbHeight, font);
 
   char scrollLinesBuf[4];
   snprintf(scrollLinesBuf, sizeof(scrollLinesBuf), "%u", settings_.scrollStepLines);
   SettingRow scrollLinesRow(Rect{boxX + 16, listTop + rowH, boxW - 32, rowH}, "SCROLL LINES", scrollLinesBuf);
-  scrollLinesRow.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+  scrollLinesRow.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   scrollLinesRow.setSelected(readingSettingsFocus_ == 1);
   scrollLinesRow.render(fb, fbWidth, fbHeight, font);
 
@@ -254,7 +256,7 @@ void TxtReaderScreen::drawReadingSettingsOverlay(uint8_t* fb, uint16_t fbWidth, 
   char bookmarkCountBuf[8];
   snprintf(bookmarkCountBuf, sizeof(bookmarkCountBuf), "%u", static_cast<unsigned>(bookmarks.size()));
   SettingRow bookmarksRow(Rect{boxX + 16, listTop + rowH * 2, boxW - 32, rowH}, "BOOKMARKS", bookmarkCountBuf);
-  bookmarksRow.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+  bookmarksRow.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   bookmarksRow.setSelected(readingSettingsFocus_ == 2);
   bookmarksRow.render(fb, fbWidth, fbHeight, font);
 }
@@ -309,7 +311,7 @@ void TxtReaderScreen::drawBookmarkList(uint8_t* fb, uint16_t fbWidth, uint16_t f
     // ポインタで保持するため、render()呼び出しをまたいで生存させる必要はない)。
     SettingRow row(Rect{boxX + 16, listTop + static_cast<int>(i) * rowH, boxW - 32, rowH},
                   bookmarks[i].preview.c_str(), valueBuf);
-    row.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    row.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
     row.setSelected(static_cast<int>(i) == bookmarkListFocus_);
     row.render(fb, fbWidth, fbHeight, font);
   }

@@ -4,8 +4,8 @@
 #include "../gfx/Icon.h"
 
 // ホーム画面の4分割グリッドで使うボタン。アイコン(40px)+ラベルの縦積みレイアウト。
-// 選択中は背景反転(黒背景・白文字)になる。setIcon()を呼ばない場合はアイコンを
-// 描画しない(空きスロット用)。
+// 選択中は薄いグレーのドットパターン背景になる(SettingRowと同じ手法)。setIcon()を
+// 呼ばない場合はアイコンを描画しない(空きスロット用)。
 class HomeGridButton : public Widget {
  public:
   HomeGridButton() : bounds_{}, label_("") {}

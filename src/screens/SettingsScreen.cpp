@@ -3,6 +3,7 @@
 #include <InputManager.h>
 #include <SDCardManager.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "../gfx/FrameBufferOps.h"
@@ -16,9 +17,7 @@ SettingsScreen::SettingsScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& 
       settings_(settings),
       fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  statusBar_.setLeftText("SETTINGS");
 
   // UP/DOWN(行フォーカス移動)は側面ボタンのためフッターには表示できない。
   footerItems_[0] = {PhysicalButton::kBack, "HOME"};
@@ -63,7 +62,7 @@ const char* SettingsScreen::labelForIndex(int index) {
   switch (index) {
     case 0: return "TIME";
     case 1: return "TIMEZONE";
-    case 2: return "CLOCK IN STATUS BAR";
+    case 2: return "RTC ON/OFF";
     case 3: return "SYSTEM FONT";
     case 4: return "BOOK FONT";
     case 5: return "TEXT SIZE";
@@ -95,10 +94,14 @@ SettingsScreen::FontTarget SettingsScreen::fontTargetForIndex(int index) {
 }
 
 void SettingsScreen::layoutRows(const Font& font) {
-  const int rowH = font.lineHeight() + kRowPadding;
+  // BLUETOOTH/FOLDER SYNC行はアイコン(SettingRow::kIconPx)を使うため、フォントサイズ
+  // 設定が小さくてもはみ出さないよう行高さはフォントの行高さとアイコンサイズの
+  // 大きい方を基準にする(FolderScreen::RowHeight()と同じ考え方)。
+  const int rowH = std::max(font.lineHeight(), SettingRow::kIconPx) + kRowPadding;
   for (int i = 0; i < kItemCount; i++) {
-    rows_[i].setBounds(Rect{0, kStatusBarHeight + i * rowH, static_cast<int>(fbWidth_), rowH});
-    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    const int y = i * rowH;
+    rows_[i].setBounds(Rect{0, y, static_cast<int>(fbWidth_), rowH});
+    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   }
   // BLUETOOTH/FOLDER SYNCのみ既存のアイコン資産を流用する(他の行は従来通りアイコンなし)。
   rows_[9].setIcon(IconId::kBluetooth);
@@ -231,7 +234,7 @@ void SettingsScreen::refreshRowValues() {
         break;
       }
       case ItemKind::kToggle:
-        rowValues_[i] = settings_.showClockInStatusBar ? "ON" : "OFF";
+        rowValues_[i] = settings_.rtcEnabled ? "ON" : "OFF";
         break;
       case ItemKind::kFontCycle:
         rowValues_[i] = fontLabelFor(fontSelectionIndex_[static_cast<int>(fontTargetForIndex(i))]);
@@ -515,8 +518,10 @@ void SettingsScreen::clearReaderCache() {
 }
 
 void SettingsScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
-
+  if (editingMarkdownMenu_) {
+    drawMarkdownMenu(fb, fbWidth, fbHeight, font);
+    return;
+  }
   if (editingClock_) {
     drawClockEdit(fb, fbWidth, fbHeight, font);
   } else if (editingFont_) {
@@ -547,7 +552,7 @@ void SettingsScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, co
 
 void SettingsScreen::drawClockEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 24;
+  const int titleY = 24;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET TIME");
 
   char fieldBufs[5][8];
@@ -567,11 +572,12 @@ void SettingsScreen::drawClockEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHei
     }
 
     const int w = font.measureText(fieldBufs[i]);
-    font.drawText(fb, fbWidth, fbHeight, x, fieldY, fieldBufs[i]);
     if (i == clockFieldIndex_) {
-      // SettingRowと同じ手法: 白背景に黒文字を描いてから矩形ごと反転させる。
-      FrameBufferOps::invertRect(fb, fbWidth, fbHeight, x - 2, fieldY - 2, w + 4, lineH + 4);
+      // SettingRowと同じ手法: 薄いグレーのドットパターンを文字より先に敷く
+      // (文字の黒画素はdrawText()が透過描画で上書きするため欠けない)。
+      FrameBufferOps::fillRectLightGrayDither(fb, fbWidth, fbHeight, x - 2, fieldY - 2, w + 4, lineH + 4);
     }
+    font.drawText(fb, fbWidth, fbHeight, x, fieldY, fieldBufs[i]);
     x += w;
   }
 
@@ -581,7 +587,7 @@ void SettingsScreen::drawClockEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHei
 
 void SettingsScreen::drawFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 16;
+  const int titleY = 16;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY,
                 (fontPickerTarget_ == FontTarget::kSystem) ? "SELECT SYSTEM FONT" : "SELECT BOOK FONT");
 
@@ -595,7 +601,7 @@ void SettingsScreen::drawFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHe
     // コピーせずポインタで保持するため、寿命がrender()呼び出しをまたいではいけない)。
     const String label = fontLabelFor(i);
     SettingRow row(Rect{0, listTop + i * rowH, static_cast<int>(fbWidth), rowH}, label.c_str(), "");
-    row.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    row.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
     row.setSelected(i == fontPickerFocusIndex_);
     row.render(fb, fbWidth, fbHeight, font);
   }
@@ -603,7 +609,7 @@ void SettingsScreen::drawFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHe
 
 void SettingsScreen::drawMarkdownMenu(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 16;
+  const int titleY = 16;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, "MARKDOWN FONTS");
 
   const int rowH = lineH + kRowPadding;
@@ -614,7 +620,7 @@ void SettingsScreen::drawMarkdownMenu(uint8_t* fb, uint16_t fbWidth, uint16_t fb
     const String label = markdownRoleFontLabelFor(role, mdRoleSelectionIndex_[i]);
     SettingRow row(Rect{0, listTop + i * rowH, static_cast<int>(fbWidth), rowH}, markdownRoleLabel(role),
                   label.c_str());
-    row.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    row.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
     row.setSelected(i == markdownMenuFocusIndex_);
     row.render(fb, fbWidth, fbHeight, font);
   }
@@ -623,7 +629,7 @@ void SettingsScreen::drawMarkdownMenu(uint8_t* fb, uint16_t fbWidth, uint16_t fb
 void SettingsScreen::drawMarkdownFontPicker(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                                             const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 16;
+  const int titleY = 16;
   char titleBuf[32];
   snprintf(titleBuf, sizeof(titleBuf), "SELECT %s FONT", markdownRoleLabel(markdownFontPickerRole_));
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, titleBuf);
@@ -635,7 +641,7 @@ void SettingsScreen::drawMarkdownFontPicker(uint8_t* fb, uint16_t fbWidth, uint1
   for (int i = 0; i < total; i++) {
     const String label = markdownRoleFontLabelFor(markdownFontPickerRole_, i);
     SettingRow row(Rect{0, listTop + i * rowH, static_cast<int>(fbWidth), rowH}, label.c_str(), "");
-    row.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    row.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
     row.setSelected(i == markdownFontPickerFocusIndex_);
     row.render(fb, fbWidth, fbHeight, font);
   }
@@ -643,7 +649,7 @@ void SettingsScreen::drawMarkdownFontPicker(uint8_t* fb, uint16_t fbWidth, uint1
 
 void SettingsScreen::drawTimezoneEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 24;
+  const int titleY = 24;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET TIMEZONE");
 
   char buf[8];
@@ -657,7 +663,7 @@ void SettingsScreen::drawTimezoneEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fb
 
 void SettingsScreen::drawLongPressEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 24;
+  const int titleY = 24;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET LONG PRESS TIME");
 
   char buf[8];
@@ -671,7 +677,7 @@ void SettingsScreen::drawLongPressEdit(uint8_t* fb, uint16_t fbWidth, uint16_t f
 
 void SettingsScreen::drawStandbyGammaEdit(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
   const int lineH = font.lineHeight();
-  const int titleY = kStatusBarHeight + 24;
+  const int titleY = 24;
   font.drawText(fb, fbWidth, fbHeight, 16, titleY, "SET PHOTO GAMMA");
 
   char buf[8];
@@ -698,7 +704,7 @@ void SettingsScreen::drawClearCacheOverlay(uint8_t* fb, uint16_t fbWidth, uint16
   font.drawText(fb, fbWidth, fbHeight, boxX + 16, textY, "CLEAR READING CACHE?");
 
   SettingRow confirmRow(Rect{boxX + 16, textY + lineH + 12, boxW - 32, lineH + 10}, "CLEAR", "");
-  confirmRow.setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+  confirmRow.setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   confirmRow.setSelected(true);
   confirmRow.render(fb, fbWidth, fbHeight, font);
 
@@ -899,7 +905,10 @@ ScreenAction SettingsScreen::handleButton(uint8_t buttonIndex) {
         enterTimezoneEdit();
         return ScreenAction::kRedraw;
       case ItemKind::kToggle:
-        settings_.showClockInStatusBar = !settings_.showClockInStatusBar;
+        settings_.rtcEnabled = !settings_.rtcEnabled;
+        if (settings_.rtcEnabled && !rtc_.ready()) {
+          rtc_.begin();
+        }
         SettingsService::save(settings_);
         refreshRowValues();
         return ScreenAction::kRedraw;

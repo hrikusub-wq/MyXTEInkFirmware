@@ -4,10 +4,8 @@
 
 FolderSyncScreen::FolderSyncScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, BleTransferService& ble)
     : ble_(ble),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   (void)font;
-  statusBar_.setLeftText("FOLDER SYNC");
   footerItems_[0] = {PhysicalButton::kBack, "SETTINGS"};
   footer_.setItems(footerItems_, 1);
 }
@@ -84,11 +82,10 @@ bool FolderSyncScreen::pollUpdates() {
 }
 
 void FolderSyncScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  statusBar_.render(fb, fbWidth, fbHeight, font);
 
   const int lineH = font.lineHeight();
   const int textX = 16;
-  int y = kStatusBarHeight + 24;
+  int y = 24;
 
   switch (uiState_) {
     case UiState::kNotConnected:

@@ -2,7 +2,7 @@
 #include "../core/BleTransferService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
-#include "../ui/StatusBar.h"
+#include "../ui/SettingRow.h"
 
 // ローカルフォルダ同期画面。SettingsScreenの「FOLDER SYNC」から開く。
 //
@@ -34,15 +34,13 @@ class FolderSyncScreen : public Screen {
   // main.cppのloop()から一定間隔で呼ぶ。状態が変化していればtrueを返す。
   bool pollUpdates();
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // setBatteryPercent/setBatteryCharging removed
 
  private:
   enum class UiState { kNotConnected, kWaitingForCount, kUpToDate, kSyncing, kCompleted, kError };
   // 現在同期中の操作が転送か削除かの表示切り替え用。
   enum class OperationKind { kNone, kTransfer, kDelete };
 
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
 
   BleTransferService& ble_;
@@ -57,7 +55,6 @@ class FolderSyncScreen : public Screen {
   String cachedFileName_;
   uint32_t cachedReceivedBytes_ = 0;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[1];
 };

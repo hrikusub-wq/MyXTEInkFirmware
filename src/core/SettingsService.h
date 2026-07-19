@@ -20,7 +20,7 @@ struct AppSettings {
   uint8_t miniFontScale = 2;      // MiniFontImplの拡大率(1-4)。systemFontKind==kMiniFont時のみ意味を持つ
   char cjkFontPath[64] = {};      // systemFontKind==kCjkFont時に読み込む.cpfontのパス
   char binFontPath[64] = {};      // systemFontKind==kBinFont時に読み込む.binのパス(幅・高さはファイル名から解析、XteinkBinFontImpl::parseDimensions()参照)
-  bool showClockInStatusBar = false;
+  bool rtcEnabled = false;
   int8_t timezoneOffsetHours = 0;  // RTC生値からの時差(-9〜+9)。表示・編集時にRtcService::addHoursToDateTime()で適用する
 
   // 読書画面のMarkdown表示で使う、ロール別の.binフォントパス(いずれも空文字なら

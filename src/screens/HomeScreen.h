@@ -2,7 +2,10 @@
 #include "../ui/FooterGuide.h"
 #include "../ui/HomeGridButton.h"
 #include "../ui/Screen.h"
-#include "../ui/StatusBar.h"
+#include "../core/BatteryService.h"
+#include "../core/RtcService.h"
+#include "../core/SettingsService.h"
+#include "../ui/SettingRow.h"
 
 // ホーム画面。上部に直近の本(TXT読書画面での進捗があれば実データ、なければ
 // プレースホルダー表示)、下部に小さなアイコン+ラベルのボタンを「アプリグリッド」
@@ -37,7 +40,7 @@ class HomeScreen : public Screen {
     // 今後ボタンを追加する場合はここに追記(kButtonDefs[]の並び順と一致させる)
   };
 
-  HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font);
+  HomeScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, BatteryService& battery, RtcService& rtc, AppSettings& appSettings);
 
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) override;
   ScreenAction handleButton(uint8_t buttonIndex) override;
@@ -46,9 +49,7 @@ class HomeScreen : public Screen {
   // 「どのグリッドボタンが選ばれて遷移が要求されたか」を知るために呼ぶ。
   GridButton lastActivatedButton() const { return static_cast<GridButton>(focusIndex_); }
 
-  // main.cpp側がBatteryServiceから読み取った最新の残量・充電状態をここで反映する。
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // StatusBar methods removed
 
   // 直近に開いていた本を反映する(起動時・読書画面を閉じたときにmain.cppが呼ぶ)。
   // pathが空のままなら「本がまだない」プレースホルダー表示が続く。
@@ -58,15 +59,12 @@ class HomeScreen : public Screen {
   // main.cpp側がここから開くべきファイルパスを取得する。
   const String& lastBookPath() const { return lastBookPath_; }
 
-  // ステータスバー左側の時刻表示(設定でON/OFF切り替え可能)。空文字列で非表示。
-  // main.cpp側がRtcServiceから読み取った"HH:MM"を定期的に渡す。
-  void setClockText(const char* text);
+  // setClockText removed
 
  private:
   static constexpr int kButtonCount = 6;  // 実装済みのボタン数(kButtonDefs[]の要素数と一致させること)
   static constexpr int kColsPerRow = 3;   // 1行に並べる列数。超えた分は自動で次の行になる
   static constexpr int kRowCount = (kButtonCount + kColsPerRow - 1) / kColsPerRow;  // 切り上げ除算
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
   static constexpr int kBookAreaHeight = 220;  // 上部の本プレースホルダー領域の高さ
   static constexpr int kGridMargin = 16;
@@ -76,7 +74,6 @@ class HomeScreen : public Screen {
   void updateFocus();
   void drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[3];
   HomeGridButton buttons_[kButtonCount];
@@ -85,5 +82,7 @@ class HomeScreen : public Screen {
   String lastBookPath_;
   String lastBookTitle_;
   int lastBookPercent_ = 0;
-  String clockText_;
+  BatteryService& battery_;
+  RtcService& rtc_;
+  AppSettings& appSettings_;
 };

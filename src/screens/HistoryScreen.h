@@ -1,11 +1,11 @@
 #pragma once
+#include <algorithm>
 #include <vector>
 
 #include "../core/TxtReaderService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
 #include "../ui/SettingRow.h"
-#include "../ui/StatusBar.h"
 
 // 最近開いた本の履歴一覧。ホーム画面のBACKボタンから開く
 // (詳細はREADME「履歴画面について」を参照)。
@@ -33,14 +33,12 @@ class HistoryScreen : public Screen {
   // handleButton()がScreenAction::kOpenFileを返したとき、main.cpp側がこれを使う。
   const String& pendingOpenFilePath() const { return pendingOpenPath_; }
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
-
  private:
   static constexpr int kMaxRows = TxtReaderService::kMaxHistoryEntries;
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
-  static constexpr int kRowPadding = 10;
+  // 「リストの視認性を上げてほしい」というフィードバックを受けて拡大(以前は10、
+  // FolderScreen.hのkRowPaddingコメント参照)。
+  static constexpr int kRowPadding = 30;
 
   void layoutRows(const Font& font);
   void refreshRowLabels();
@@ -52,7 +50,6 @@ class HistoryScreen : public Screen {
   int focusIndex_ = 0;
   String pendingOpenPath_;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[4];
 

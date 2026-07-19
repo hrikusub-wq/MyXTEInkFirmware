@@ -3,12 +3,13 @@
 
 #include <vector>
 
+#include "../core/BatteryService.h"
 #include "../core/FileBrowserService.h"
+#include "../core/RtcService.h"
 #include "../core/SettingsService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
 #include "../ui/SettingRow.h"
-#include "../ui/StatusBar.h"
 
 // 待機画面。SDカードの/System/standby配下にある.jpg/.jpegファイルを一覧表示し、CONFIRMで
 // 選んだ画像をE-inkに表示したあとディープスリープへ移行する(PowerManager参照)。
@@ -25,7 +26,7 @@
 class StandbyScreen : public Screen {
  public:
   StandbyScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, FileBrowserService& fileBrowser,
-                EInkDisplay& display, AppSettings& appSettings);
+                EInkDisplay& display, AppSettings& appSettings, BatteryService& battery, RtcService& rtc);
 
   // 画面を開くたびにmain.cppが呼ぶ。/System/standby配下の.jpg/.jpegファイル一覧を
   // 再スキャンし、画像表示中の状態があればリセットしてリスト表示に戻す。
@@ -50,36 +51,40 @@ class StandbyScreen : public Screen {
   bool isShowingImage() const { return mode_ == Mode::kShowingImage; }
 
   // リスト表示から画像表示へ遷移した直後、main.cpp側がrender()/displayBuffer()の
-  // 通常の1回きりのパイプラインの代わりに呼ぶ。4階調グレースケール表示は
-  // 「まず白黒ベース画像を実際にパネルへ送る→続けてグレー階調を上乗せする」という
-  // 2段階のディスプレイ書き込みが必須(EInkDisplay/README.md「Rendering greyscale
-  // frames」参照)なので、Screenインターフェースの通常のrender()1回だけでは実現
-  // できず、この専用メソッドで完結させる。呼び出し後はimageDrawn_がtrueになり、
-  // 以降の(バッテリー変化等による)通常のrender()呼び出しは何もしない。
-  void showImageGrayscale();
+  // 通常の1回きりのパイプラインの代わりに呼ぶ。デコード前に「LOADING...」を
+  // 一度表示してから本番の画像を表示する2段階の書き込みが必要なため、
+  // Screenインターフェースの通常のrender()1回だけでは実現できず、この専用
+  // メソッドで完結させる(以前は4階調グレースケール駆動も行っていたが、退色の
+  // 真因だったため廃止した、StandbyScreen.cppのquantizeLevel()宣言部コメント
+  // 参照)。呼び出し後はimageDrawn_がtrueになり、以降の(バッテリー変化等による)
+  // 通常のrender()呼び出しは何もしない。
+  void showImage();
 
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
+  // setBatteryPercent/setBatteryCharging removed due to StatusBar removal
 
  private:
   enum class Mode { kList, kShowingImage };
 
   static constexpr int kMaxVisibleRows = 24;
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
-  static constexpr int kRowPadding = 10;
+  // 「リストの視認性を上げてほしい」というフィードバックを受けて拡大(以前は10、
+  // FolderScreen.hのkRowPaddingコメント参照)。
+  static constexpr int kRowPadding = 30;
   static constexpr const char* kStandbyDir = "/System/standby";
 
   void reloadFileList();
   void updateRowSelection();
   void layoutRows(const Font& font);
+  void drawOverlays(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const;
 
   FileBrowserService& fileBrowser_;
   EInkDisplay& display_;
   AppSettings& appSettings_;
-  // showImageGrayscale()冒頭の「読み込み中」表示用(JPEGデコードに時間がかかる間、
+  BatteryService& battery_;
+  RtcService& rtc_;
+  // showImage()冒頭の「読み込み中」表示用(JPEGデコードに時間がかかる間、
   // 一覧画面がそのまま残って見えるのを避けるため)。Screen::render()は毎回font
-  // 引数を受け取れるが、showImageGrayscale()は専用メソッドでその経路を経由しない
+  // 引数を受け取れるが、showImage()は専用メソッドでその経路を経由しない
   // ため、コンストラクタで受け取ったフォントを保持しておく。
   const Font* font_;
   uint16_t fbWidth_;
@@ -93,7 +98,6 @@ class StandbyScreen : public Screen {
   bool imageDrawn_ = false;
   bool sleepRequested_ = false;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[2];
 

@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "../gfx/FrameBufferOps.h"
+#include "../ui/BatteryDateOverlay.h"
 
 namespace {
 
@@ -61,25 +62,6 @@ int16_t* g_bandError = nullptr;   // [kMaxBandRows+1][g_bandErrorWidth]、行優
 int g_bandErrorWidth = 0;         // 出力(スケール後)の画像幅+2(オフセット込み)
 int g_bandY0 = -1;                // このバンドの先頭ソースY(-1=未初期化)
 int g_bandPrevOutRows = 0;        // 直前バンドで実際に使った出力行数(バンド切り替え時の引き継ぎに使う)
-
-// 4階調グレースケール表示用。非nullptrの方だけjpegDrawCb()がマーカーを書き込む
-// (EInkDisplayのcopyGrayscaleLsbBuffers()/copyGrayscaleMsbBuffers()にそのまま
-// 渡せる形式、README.md「Rendering greyscale frames」参照)。通常の1bpp描画
-// (showImageGrayscale()を使わないフォールバック経路)では両方nullptrのままにする。
-//
-// LSB/MSBの2枚を同時には保持しない(52272バイト×2=約102KBはESP32-C3のDRAM
-// 予算を超えてリンクエラーになった、実機ビルドで確認済み)。代わりにJPEGを
-// 2回デコードし、1回目でLSBプレーンを構築・送信、2回目で同じ静的バッファを
-// 使い回してMSBプレーンを構築・送信する(showImageGrayscale()参照)。
-uint8_t* g_lsbFb = nullptr;
-uint8_t* g_msbFb = nullptr;
-// EInkDisplay::X3_BUFFER_SIZE(792x528を1bppでパックしたサイズ)と同じサイズの
-// バッファ。以前はstatic配列(.bss常駐)にしていたが、これが52272バイトを常時
-// 占有し続けた結果、setup()でのBLEスタック初期化(NimBLEDevice::init())に
-// 必要なヒープを圧迫して起動時にハングする不具合が実機で発生した(待機画面を
-// 一度も使っていなくても常に発生する致命的な不具合だった)。そのため
-// showImageGrayscale()の実行中だけmalloc()で確保し、使い終わったら即座に
-// free()する(通常時はヒープを一切占有しない)。
 
 void* jpegOpenCb(const char* filename, int32_t* pFileSize) {
   g_jpegFile = SdMan.open(filename, O_RDONLY);
@@ -134,35 +116,18 @@ void buildGammaLut(float gamma) {
   }
 }
 
-// 4階調(白/明るいグレー/暗いグレー/黒)へ量子化し、FrameBufferOps経由で論理座標へ
+// quantizeLevel()が決めたレベル(0〜3、kBlackMax/kWhiteMin宣言部のコメント参照)を
+// 白(レベル3)かそれ以外(黒扱い)かの2値としてFrameBufferOps経由で論理座標へ
 // 描画する(EInkDisplayのdrawImage()は座標系が不明なため使わない)。
-//
-// g_lsbFb/g_msbFbのうち非nullptrの方には、g_targetFb(白黒ベース面)に加えて
-// グレー階調のマーカーも書き込む(EInkDisplay/README.md「Rendering greyscale
-// frames」の手順に合わせた符号化。showImageGrayscale()がLSB/MSBを別々の
-// デコードパスで呼ぶため、同時に両方非nullptrになることは無い):
-//   - ベース面: 白(レベル3)以外はすべて黒として描く(グレーもベース面では黒扱い)
-//   - LSBプレーン: 暗いグレー(レベル1)の画素だけ1を立てる
-//   - MSBプレーン: 暗い/明るいグレー(レベル1・2)の画素に1を立てる
-// FrameBufferOps::setWhitePixel()はビットを1にするだけの操作なので、「1を立てる」
-// マーカー用途にそのまま流用できる(白黒ベース面での意味とは無関係)。
-//
-// 量子化レベル(0〜3)が決まった後の描画(ベース面+LSB/MSBマーカー)をまとめた
-// ヘルパー。FS拡散ありなし両方の経路から共通で呼ぶ。
+// 以前は4階調グレースケール表示用にLSB/MSBプレーンへもマーカーを書き込んでいたが、
+// この待機画面はパネルの4階調グレースケール駆動(専用の中間電圧LUT波形)自体を
+// 使わなくなった(quantizeLevel()宣言部のコメント参照)ため、そのマーカー書き込みは
+// 不要になり削除した。
 inline void drawQuantizedPixel(int level, int fx, int fy) {
   if (level == 3) {
     FrameBufferOps::setWhitePixel(g_targetFb, g_targetFbWidth, g_targetFbHeight, fx, fy);
   } else {
     FrameBufferOps::setBlackPixel(g_targetFb, g_targetFbWidth, g_targetFbHeight, fx, fy);
-  }
-  // LSB/MSBは同時に構築せず、呼び出し側(showImageGrayscale())が2回のデコード
-  // パスに分けて呼ぶ(g_lsbFb/g_msbFb宣言部のコメント参照)ため、それぞれ独立に
-  // nullptrかどうかを見る。
-  if (g_lsbFb && level == 1) {
-    FrameBufferOps::setWhitePixel(g_lsbFb, g_targetFbWidth, g_targetFbHeight, fx, fy);
-  }
-  if (g_msbFb && (level == 1 || level == 2)) {
-    FrameBufferOps::setWhitePixel(g_msbFb, g_targetFbWidth, g_targetFbHeight, fx, fy);
   }
 }
 
@@ -204,6 +169,35 @@ inline int averagedGammaGray(const JPEGDRAW* pDraw, int lx, int ly, int colSpan,
 // どちらの経路でも、隣接する2つのソース画素(行・列とも最大2つ)が同じ出力画素に
 // マップされる場合は先に平均化してから量子化する(averagedGammaGray参照、
 // g_bandError宣言部のコメントに詳細)。
+// 【グレースケール駆動を廃止した経緯】以前は4階調のうち「暗いグレー」「明るい
+// グレー」(レベル1・2)をLSB/MSBプレーン経由の専用グレーLUT波形で駆動していたが、
+// 実機検証で、このグレー駆動をパネルに1回でも使うと(画素の量に関わらず、フレーム
+// 全体がその波形で駆動されるため)、表示後数秒〜十数秒かけて画像全体が光学的に
+// 緩和し明るく見える(退色したように見える)現象が確認された。閾値を黒白寄りに
+// 振ってグレー画素の"量"を減らしても症状は変わらず、グレー画素をゼロにして初めて
+// (=グレーLUT波形自体を一切使わなくなって初めて)症状が消えることを実機で確認した。
+// そのため、このファイルはもう`EInkDisplay::copyGrayscaleLsbBuffers()`/
+// `copyGrayscaleMsbBuffers()`/`displayGrayBuffer()`(グレー専用LUT波形)を一切
+// 呼ばず、常に通常の白黒2値駆動(パネルが最も安定する状態)だけで描画する
+// (`showImage()`参照)。
+//
+// この量子化自体は4階調のまま残している。レベル1・2は画面上ではどちらも黒として
+// 描画される(drawQuantizedPixel()参照)が、誤差拡散の計算上は0/3と異なる代表輝度
+// (85/170)として扱われるため、黒白2値の中でも中間調の網点密度が変わり、諧調の
+// 見え方に影響する(退色とは無関係な、単なる仕上がりの好み)。kBlackMax/kWhiteMinを
+// 直接書き換えて好みの見え方を探ってよい:
+//   - kBlackMaxを上げる/kWhiteMinを下げる → 暗部・明部の網点が早めに黒/白へ寄る
+//     (よりくっきり・コントラスト重視)
+//   - kBlackMaxを下げる/kWhiteMinを上げる → 中間調の網点パターンがより滑らかになる
+constexpr int kBlackMax = 80;  // これ以下の輝度は黒(level 0)
+constexpr int kWhiteMin  = 250;  // これ以上の輝度は白(level 3)
+
+inline int quantizeLevel(int gray) {
+  if (gray <= kBlackMax) return 0;
+  if (gray >= kWhiteMin) return 3;
+  return (gray <= (kBlackMax + kWhiteMin) / 2) ? 1 : 2;
+}
+
 int jpegDrawCb(JPEGDRAW* pDraw) {
   if (!g_targetFb) return 0;
 
@@ -218,7 +212,7 @@ int jpegDrawCb(JPEGDRAW* pDraw) {
         const int fx = mapOutX(pDraw->x + lx);
         const int colSpan = (lx + 1 < w && mapOutX(pDraw->x + lx + 1) == fx) ? 2 : 1;
         const int gray = averagedGammaGray(pDraw, lx, ly, colSpan, rowSpan);
-        const int level = (gray * 3 + 127) / 255;
+        const int level = quantizeLevel(gray);
         drawQuantizedPixel(level, fx, fy);
         lx += colSpan;
       }
@@ -268,9 +262,12 @@ int jpegDrawCb(JPEGDRAW* pDraw) {
         const int gray = avgGray + curRow[localX + 1];
         const int clamped = gray < 0 ? 0 : (gray > 255 ? 255 : gray);
 
-        // 4階調(0=黒・1=暗いグレー・2=明るいグレー・3=白)への量子化。各レベルの
-        // 代表輝度は0/85/170/255(256を3等分)とし、量子化誤差を周囲へ拡散する。
-        const int level = (clamped * 3 + 127) / 255;
+        // 4階調(0=黒・1=暗いグレー・2=明るいグレー・3=白)への量子化(quantizeLevel()、
+        // グレー駆動の緩和対策で黒白寄りに閾値を振っている、宣言部のコメント参照)。
+        // 誤差拡散の基準となる代表輝度は0/85/170/255(256を3等分)のまま据え置く
+        // (閾値と代表輝度がずれるが、FS拡散の目的は「量子化で失われた明るさを周囲に
+        // 伝播させる」ことなので、代表輝度はどの分割でも変わらず妥当)。
+        const int level = quantizeLevel(clamped);
         const int quantized = (level * 255) / 3;
         const int err = clamped - quantized;
 
@@ -294,13 +291,11 @@ int jpegDrawCb(JPEGDRAW* pDraw) {
 }
 
 // jpeg.open()〜decode()〜close()までの一連の処理をまとめたヘルパー。
-// lsbFb/msbFbは4階調グレースケール表示のときだけ非nullptrを渡す(render()の
-// フォールバック経路では両方nullptrのまま呼び、通常の1bpp描画になる)。
 // gammaPercentはSettingsScreen「PHOTO GAMMA」で設定した値(20〜100、小さいほど
 // 明るい、AppSettings::standbyGammaPercent参照)。
 // 戻り値はJPEGのオープンに成功したかどうか。
-bool decodeAndDrawImage(const String& path, uint16_t fbWidth, uint16_t fbHeight, uint8_t* baseFb, uint8_t* lsbFb,
-                        uint8_t* msbFb, uint8_t gammaPercent) {
+bool decodeAndDrawImage(const String& path, uint16_t fbWidth, uint16_t fbHeight, uint8_t* baseFb,
+                        uint8_t gammaPercent) {
   // JPEGDEC(JPEGIMAGE)は内部にデコード用の固定サイズバッファを複数持ち、サイズが
   // 約17KB以上ある。ESP32-C3のデフォルトタスクスタック(約8KB)を超えるため、
   // スタック上のローカル変数にすると即座にスタックオーバーフロー(Guru Meditation
@@ -353,12 +348,10 @@ bool decodeAndDrawImage(const String& path, uint16_t fbWidth, uint16_t fbHeight,
   g_targetFb = baseFb;
   g_targetFbWidth = fbWidth;
   g_targetFbHeight = fbHeight;
-  g_lsbFb = lsbFb;
-  g_msbFb = msbFb;
 
   // Floyd-Steinberg誤差拡散用のバンドバッファ(jpegDrawCbのコメント参照)。
-  // デコード対象1回ごとに確保・解放する(常時確保するとBLE初期化用のヒープを
-  // 圧迫する不具合があった、g_lsbFb/g_msbFb宣言部のコメント参照)。確保に失敗
+  // デコード対象1回ごとに確保・解放する(常時確保するとBLEスタック初期化用の
+  // ヒープを圧迫し起動時にハングする不具合があった)。確保に失敗
   // した場合(ヒープ逼迫時)でもデコード自体は諦めない。jpegDrawCbがg_bandError
   // ==nullptrを見て、誤差拡散なしの単純量子化にフォールバックする(何も
   // 表示されないよりは階調が粗くても表示されるほうを優先)。
@@ -379,8 +372,6 @@ bool decodeAndDrawImage(const String& path, uint16_t fbWidth, uint16_t fbHeight,
   free(g_bandError);
   g_bandError = nullptr;
   g_targetFb = nullptr;
-  g_lsbFb = nullptr;
-  g_msbFb = nullptr;
   jpeg.close();
   return true;
 }
@@ -388,16 +379,16 @@ bool decodeAndDrawImage(const String& path, uint16_t fbWidth, uint16_t fbHeight,
 }  // namespace
 
 StandbyScreen::StandbyScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& font, FileBrowserService& fileBrowser,
-                              EInkDisplay& display, AppSettings& appSettings)
+                             EInkDisplay& display, AppSettings& appSettings, BatteryService& battery, RtcService& rtc)
     : fileBrowser_(fileBrowser),
       display_(display),
       appSettings_(appSettings),
       font_(&font),
       fbWidth_(fbWidth),
       fbHeight_(fbHeight),
-      statusBar_(Rect{0, 0, static_cast<int>(fbWidth), kStatusBarHeight}),
+      battery_(battery),
+      rtc_(rtc),
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
-  statusBar_.setLeftText("STANDBY");
   footerItems_[0] = {PhysicalButton::kBack, "HOME"};
   footerItems_[1] = {PhysicalButton::kConfirm, "", IconId::kCheck, true};
   footer_.setItems(footerItems_, 2);
@@ -408,8 +399,8 @@ StandbyScreen::StandbyScreen(uint16_t fbWidth, uint16_t fbHeight, const Font& fo
 void StandbyScreen::layoutRows(const Font& font) {
   const int rowH = font.lineHeight() + kRowPadding;
   for (int i = 0; i < kMaxVisibleRows; i++) {
-    rows_[i].setBounds(Rect{0, kStatusBarHeight + i * rowH, static_cast<int>(fbWidth_), rowH});
-    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kInvert);
+    rows_[i].setBounds(Rect{0, 16 + i * rowH, static_cast<int>(fbWidth_), rowH});
+    rows_[i].setSelectionStyle(SettingRow::SelectionStyle::kGrayHighlight);
   }
 }
 
@@ -454,27 +445,56 @@ bool StandbyScreen::consumeSleepRequested() {
   return v;
 }
 
+void StandbyScreen::drawOverlays(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
+  RtcDateTime dt;
+  RtcDateTime localDt;
+  const RtcDateTime* pDt = nullptr;
+  if (appSettings_.rtcEnabled && rtc_.ready() && rtc_.readDateTime(dt)) {
+    localDt = addHoursToDateTime(dt, appSettings_.timezoneOffsetHours);
+    pDt = &localDt;
+  }
+  BatteryDateOverlay::drawBatteryAndDate(
+      fb, fbWidth, fbHeight, font,
+      16, static_cast<int>(fbHeight) - 40,
+      battery_.readPercent(), battery_.isCharging(), pDt,
+      true, false);
+
+  if (focusIndex_ >= 0 && focusIndex_ < static_cast<int>(jpegFiles_.size())) {
+    const String& filename = jpegFiles_[focusIndex_];
+    int dotIndex = filename.lastIndexOf('.');
+    String basename = (dotIndex >= 0) ? filename.substring(0, dotIndex) : filename;
+
+    int nameW = font.measureText(basename.c_str());
+    int lineH = font.lineHeight();
+    int padding = 4;
+    int bgX = static_cast<int>(fbWidth) - nameW - padding * 2 - 16;
+    int bgY = 16;
+    int bgW = nameW + padding * 2;
+    int bgH = lineH + padding * 2;
+
+    FrameBufferOps::fillRoundRect(fb, fbWidth, fbHeight, bgX, bgY, bgW, bgH, 8, false);
+    font.drawText(fb, fbWidth, fbHeight, bgX + padding, bgY + padding, basename.c_str());
+  }
+}
+
 void StandbyScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
   if (mode_ == Mode::kShowingImage) {
-    // 通常はshowImageGrayscale()が画像表示への遷移を専用の2段階シーケンスで
+    // 通常はshowImage()が画像表示への遷移(「LOADING...」表示→デコード→表示)を
     // 完結させ、imageDrawn_をtrueにする(main.cpp参照)。ここに来るのは、電源
     // 不安定期間中に遷移が発生しpendingRedrawAfterSettle経由でこの通常の
-    // render()パイプラインが呼ばれた場合等のフォールバックのみで、その場合は
-    // 4階調グレースケールではなく従来通りの1bpp描画にとどめる(グレースケール表示
-    // に必要な2回の実ディスプレイ書き込みは、このrender()1回きりの呼び出しでは
-    // 完結できないため)。
+    // render()パイプラインが呼ばれた場合等のフォールバックのみ。
     if (!imageDrawn_ && focusIndex_ >= 0 && focusIndex_ < static_cast<int>(jpegFiles_.size())) {
       FrameBufferOps::fillRect(fb, fbWidth, fbHeight, 0, 0, fbWidth, fbHeight, false);  // 白紙に戻してから描画
       const String path = String(kStandbyDir) + "/" + jpegFiles_[focusIndex_];
-      decodeAndDrawImage(path, fbWidth, fbHeight, fb, nullptr, nullptr, appSettings_.standbyGammaPercent);
+      decodeAndDrawImage(path, fbWidth, fbHeight, fb, appSettings_.standbyGammaPercent);
+      drawOverlays(fb, fbWidth, fbHeight, font);
       imageDrawn_ = true;
     }
     return;  // 画像表示中はステータスバー・フッターを重ねない(画像を極力汚さない)
   }
 
-  statusBar_.render(fb, fbWidth, fbHeight, font);
   if (jpegFiles_.empty()) {
-    font.drawText(fb, fbWidth, fbHeight, 16, kStatusBarHeight + 20, "(NO IMAGES IN /System/standby)");
+    font.drawText(fb, fbWidth, fbHeight, 16, 36, "(NO IMAGES IN /System/standby)");
   } else {
     for (int i = 0; i < visibleRowCount_; i++) {
       rows_[i].render(fb, fbWidth, fbHeight, font);
@@ -483,7 +503,7 @@ void StandbyScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, con
   footer_.render(fb, fbWidth, fbHeight, font);
 }
 
-void StandbyScreen::showImageGrayscale() {
+void StandbyScreen::showImage() {
   if (focusIndex_ < 0 || focusIndex_ >= static_cast<int>(jpegFiles_.size())) {
     imageDrawn_ = true;
     return;
@@ -515,47 +535,25 @@ void StandbyScreen::showImageGrayscale() {
     display_.displayBuffer(EInkDisplay::FULL_REFRESH);
   }
 
-  // グレープレーン用バッファはこの関数の実行中だけmalloc()で確保する(常時
-  // 占有するとBLEスタック初期化用のヒープを圧迫して起動時にハングする不具合が
-  // あった、上記のg_lsbFb/g_msbFb宣言部のコメント参照)。確保に失敗した場合
-  // (ヒープが逼迫している場合)は、グレースケールを諦めて通常の1bpp描画に
-  // フォールバックする。
-  uint8_t* grayPlane = static_cast<uint8_t*>(malloc(EInkDisplay::X3_BUFFER_SIZE));
-  if (!grayPlane) {
-    if (Serial) Serial.println("[X3FW] standby: grayscale buffer alloc failed, falling back to 1bpp");
-    display_.clearScreen();
-    FrameBufferOps::fillRect(fb, fbWidth_, fbHeight_, 0, 0, fbWidth_, fbHeight_, false);
-    decodeAndDrawImage(path, fbWidth_, fbHeight_, fb, nullptr, nullptr, appSettings_.standbyGammaPercent);
-    display_.displayBuffer(EInkDisplay::FULL_REFRESH);
-    imageDrawn_ = true;
-    return;
-  }
-
-  // 手順1: 1回目のデコードで白黒ベース画像(+LSBプレーン)を構築し、実際に
-  // パネルへ表示する。グレー階調の上乗せ(displayGrayBuffer())はこのベース表示が
-  // RAMバンクへ反映された状態を前提にしているため、先に完了させる必要がある
-  // (EInkDisplay/README.md参照)。LSB/MSBを同時に保持すると約102KBになり
-  // ESP32-C3のRAM予算を圧迫するため、ここでは1枚のバッファをLSB用として使う。
+  // あえてグレースケール駆動(EInkDisplay::displayGrayBuffer()、専用の中間電圧LUT
+  // 波形)は使わず、常に通常の白黒2値駆動だけで描画する。以前は4階調グレースケール
+  // 表示を行っていたが、実機検証で「グレー駆動を1回でも使うと、画素数に関わらず
+  // 表示後数秒〜十数秒かけて画像全体が光学的に緩和し明るく見える(退色する)」ことが
+  // 確認され、グレー駆動を完全に廃止して初めて症状が消えることも確認された
+  // (quantizeLevel()宣言部のコメント参照)。この画面はユーザーがCONFIRMを押すまで
+  // 何秒でも画像を表示し続ける設計のため、パネルが最も安定する白黒2値駆動だけを
+  // 使う。
   display_.clearScreen();
   FrameBufferOps::fillRect(fb, fbWidth_, fbHeight_, 0, 0, fbWidth_, fbHeight_, false);
-  memset(grayPlane, 0x00, EInkDisplay::X3_BUFFER_SIZE);  // 0x00=「グレーマーカーなし」(README「Rendering greyscale frames」参照)
-  if (!decodeAndDrawImage(path, fbWidth_, fbHeight_, fb, grayPlane, nullptr, appSettings_.standbyGammaPercent)) {
-    free(grayPlane);
-    imageDrawn_ = true;
-    return;
-  }
-  display_.displayBuffer(EInkDisplay::FULL_REFRESH);
-  display_.copyGrayscaleLsbBuffers(grayPlane);
-
-  // 手順2: 同じバッファを使い回し、2回目のデコードでMSBプレーンを構築して送る
-  // (ベース面(fb)への書き込みは1回目と全く同じ決定的な結果になるだけで無害
-  // なので、そのまま2回目の描画対象にも使う)。
-  memset(grayPlane, 0x00, EInkDisplay::X3_BUFFER_SIZE);
-  decodeAndDrawImage(path, fbWidth_, fbHeight_, fb, nullptr, grayPlane, appSettings_.standbyGammaPercent);
-  display_.copyGrayscaleMsbBuffers(grayPlane);
-  display_.displayGrayBuffer();
-
-  free(grayPlane);
+  decodeAndDrawImage(path, fbWidth_, fbHeight_, fb, appSettings_.standbyGammaPercent);
+  // turnOffScreen=trueでパネルのアナログ電源(チャージポンプ・VCOM等)を明示的に
+  // 遮断する(EInkDisplay/README.mdが「プログラム終了前に必ずパネルを電源オフし
+  // 画像をlock inすること」と明記している)。この画面は表示後ユーザーがCONFIRMを
+  // 押すまで何秒でも表示し続けるため、通電したままにしないための保険。次に一覧へ
+  // 戻る等でdisplayBuffer()を呼んだ際は、isScreenOnを見て自動的に再通電するため、
+  // 呼び出し側で追加の対応は不要(EInkDisplay.cppのisScreenOnチェック参照)。
+  drawOverlays(fb, fbWidth_, fbHeight_, *font_);
+  display_.displayBuffer(EInkDisplay::FULL_REFRESH, true);
   imageDrawn_ = true;
 }
 

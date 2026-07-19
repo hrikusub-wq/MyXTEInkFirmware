@@ -38,13 +38,6 @@ void setWhitePixel(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int x, int 
   fb[static_cast<uint32_t>(py) * widthBytesOf(kPhysicalWidth) + (px >> 3)] |= (0x80 >> (px & 7));
 }
 
-void togglePixel(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int x, int y) {
-  if (x < 0 || y < 0 || x >= fbWidth || y >= fbHeight) return;
-  int px, py;
-  logicalToPhysical(x, y, &px, &py);
-  fb[static_cast<uint32_t>(py) * widthBytesOf(kPhysicalWidth) + (px >> 3)] ^= (0x80 >> (px & 7));
-}
-
 void fillRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
               int x, int y, int w, int h, bool black) {
   for (int yy = y; yy < y + h; yy++) {
@@ -58,11 +51,49 @@ void fillRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
   }
 }
 
-void invertRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
-                int x, int y, int w, int h) {
+void fillRoundRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                   int x, int y, int w, int h, int r, bool black) {
+  if (r > w / 2) r = w / 2;
+  if (r > h / 2) r = h / 2;
+
+  // 中央の十字部分(2つの矩形)
+  fillRect(fb, fbWidth, fbHeight, x + r, y, w - 2 * r, h, black);
+  fillRect(fb, fbWidth, fbHeight, x, y + r, r, h - 2 * r, black);
+  fillRect(fb, fbWidth, fbHeight, x + w - r, y + r, r, h - 2 * r, black);
+
+  // 4つの角(円の一部)
+  for (int cy = 0; cy < r; cy++) {
+    for (int cx = 0; cx < r; cx++) {
+      int dx = r - 1 - cx;
+      int dy = r - 1 - cy;
+      if (dx * dx + dy * dy <= r * r) {
+        // 左上
+        if (black) setBlackPixel(fb, fbWidth, fbHeight, x + cx, y + cy);
+        else       setWhitePixel(fb, fbWidth, fbHeight, x + cx, y + cy);
+        // 右上
+        if (black) setBlackPixel(fb, fbWidth, fbHeight, x + w - 1 - cx, y + cy);
+        else       setWhitePixel(fb, fbWidth, fbHeight, x + w - 1 - cx, y + cy);
+        // 左下
+        if (black) setBlackPixel(fb, fbWidth, fbHeight, x + cx, y + h - 1 - cy);
+        else       setWhitePixel(fb, fbWidth, fbHeight, x + cx, y + h - 1 - cy);
+        // 右下
+        if (black) setBlackPixel(fb, fbWidth, fbHeight, x + w - 1 - cx, y + h - 1 - cy);
+        else       setWhitePixel(fb, fbWidth, fbHeight, x + w - 1 - cx, y + h - 1 - cy);
+      }
+    }
+  }
+}
+
+void fillRectLightGrayDither(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                             int x, int y, int w, int h) {
+  // 2x2のパターンのうち1マスだけ黒にする(4px中1px=約25%被覆率)。50%の市松模様
+  // だと選択行の背景が主張しすぎて上に乗る文字が読みにくくなるため、控えめな
+  // 薄いグレーに見える密度にしている。
   for (int yy = y; yy < y + h; yy++) {
+    if ((yy & 1) != 0) continue;
     for (int xx = x; xx < x + w; xx++) {
-      togglePixel(fb, fbWidth, fbHeight, xx, yy);
+      if ((xx & 1) != 0) continue;
+      setBlackPixel(fb, fbWidth, fbHeight, xx, yy);
     }
   }
 }

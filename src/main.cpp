@@ -80,34 +80,64 @@ constexpr unsigned long kBleUiCheckIntervalMs = 500;
 // BLE状態と同じ間隔でチェックを呼ぶだけでよい。
 unsigned long lastLiveTextCheckMs = 0;
 
-// FolderScreenでのLEFT/RIGHT長押し中、E-inkのリフレッシュ待ちのたびにボタンを
-// 押し直さなくても自動的にフォーカスが進み続けるようにする(参考実装
-// crosspoint-readerのButtonNavigator::onContinuous()と同じ考え方)。isPressed()は
-// 押されている「間」ずっとtrueを返すレベル判定なので、リフレッシュでloop()が
-// ブロックされていた間の一瞬の押下エッジ(wasPressed())を取りこぼす問題を
+// 方向ボタン(LEFT/RIGHT/UP/DOWN)長押し中、E-inkのリフレッシュ待ちのたびに
+// ボタンを押し直さなくても自動的にフォーカス/ページが進み続けるようにする
+// (参考実装crosspoint-readerのButtonNavigator::onContinuous()と同じ考え方)。
+// isPressed()は押されている「間」ずっとtrueを返すレベル判定なので、リフレッシュで
+// loop()がブロックされていた間の一瞬の押下エッジ(wasPressed())を取りこぼす問題を
 // 回避できる: 押しっぱなしにしている限り、リフレッシュ明けに再開した時点でも
-// まだ「押されている」ことが分かる。UP/DOWN(側面ボタン)は既に長押し=CONFIRM/
-// BACKショートカットという別の意味を持つため対象外とし、FolderScreen内で
-// 現在何の長押し意味も持たないLEFT/RIGHTだけに限定する。
+// まだ「押されている」ことが分かる。以前はFolderScreen+LEFT/RIGHTのみだったが、
+// 「もっと軽い操作感にしてほしい・サイドボタン(UP/DOWN)での連打が遅い」という
+// フィードバックを受け、全画面・4方向ボタンに拡張した(UP/DOWNはこれと同時に
+// 長押しCONFIRM/BACKショートカットを廃止し純粋な移動キーへ変更したため、
+// 対象にできるようになった。main.cppのボタン処理forループ参照)。
 unsigned long lastContinuousNavMs = 0;
 constexpr unsigned long kContinuousNavStartMs = 400;     // 長押しとみなすまでの時間
 constexpr unsigned long kContinuousNavIntervalMs = 100;  // 連続発火の最小間隔
 
+// フォーカス移動等の単純な部分更新(FAST_REFRESH)は数百msブロッキングし、その間
+// input.update()が呼ばれない(E-inkの物理特性上、書き込み中はSPIバスも占有されて
+// おりボタンを読みに行けない)。そのため素早く連打すると、最初の1回だけが処理され
+// 残りのタップは「ブロック中に押して離された」ことがまるごと見えなくなり
+// 取りこぼされていた(フォルダ探索で連打しても思った通りに進まない不具合)。
+// 各画面のhandleButton()はフォーカス位置の更新自体をレンダリングとは独立に即座に
+// 行っているため、実際のE-ink書き込みだけを短時間デバウンスし、無操作期間
+// (kListRedrawDebounceMs)が空いてから最新の状態を1回だけ描画するようにした。
+// これによりloop()自体はブロックされたままにならず、連打の全タップを取りこぼさず
+// モデル(フォーカス位置)に反映できる(CrossPointJPのような「連打しても正しく
+// 選択できる」挙動を狙った対策。画面遷移相当のFULL_REFRESHは元々頻度が低く
+// 連打の対象にならないため対象外、下記kRedraw分岐のコメント参照)。
+bool pendingListRedraw = false;
+unsigned long pendingListRedrawFirstMs = 0;
+unsigned long lastListInputMs = 0;
+constexpr unsigned long kListRedrawDebounceMs = 60;  // これだけ操作が無ければ描画を実行する
+constexpr unsigned long kListRedrawMaxWaitMs = 220;  // 連打が続いても最悪ここまで待てば描画する
+
 // InputManagerのgetHeldTime()はボタン個別ではなく「直近に何らかのボタンが
 // 押されてから離されるまでの経過時間」というグローバルな値であり、isPressed()も
-// 直近のupdate()呼び出し時点のスナップショットでしかない。LEFT/RIGHTの押下や
-// この連続ナビ自体がFAST_REFRESHの描画ブロッキング(数百ms)を挟むと、その間
-// update()が呼ばれないため、ブロッキング明け直後の1周期はisPressed()がまだ
-// 「実際にはもう離されているのに古いtrueのまま」になりうる。さらに
-// InputManager側のデバウンス(5ms)は「状態が変化した」と検知したupdate()呼び出し
-// そのものでは確定させず、次のupdate()呼び出しで確定させる作りのため、
-// ブロッキング明け直後の1周期だけでは離されたことがまだ反映されないことがある。
-// これにより、単発タップでも1回余分に連続ナビが誤発火する不具合が実機で見つかった
-// (LEFT/RIGHTの押下エッジ処理直後の1周期をスキップするだけでは、次の1周期分の
-// 誤発火を防ぎきれなかった)。
-// 対策: LEFT/RIGHTの押下エッジを処理した直後、および連続ナビ自体がリフレッシュを
-// 行った直後は、次の1周期分だけ判定を丸ごと見送る(このフラグで持ち越す)。
-bool skipContinuousNavCheckOnce = false;
+// 直近のupdate()呼び出し時点のスナップショットでしかない。何らかのブロッキング
+// 描画(FAST_REFRESH/FULL_REFRESH、数百ms)を挟むと、その間update()が呼ばれない
+// ため、ブロック終了直後にisPressed()/getHeldTime()を見ると「ブロックしていた
+// 時間がそのまま経過時間に加算された、古いスナップショット」を見てしまう。
+//
+// さらに厄介なのは、InputManager側のデバウンス(DEBOUNCE_DELAY=5ms)は「状態が
+// 変化した」ことを検知したupdate()呼び出しそのものでは確定させず、次のupdate()
+// 呼び出しで確定させる作りな点(InputManager.cpp参照): ブロック明け最初の
+// update()は「実世界の状態が変わった」ことを検知してdebounceタイマーをリセット
+// するだけで終わり、currentStateはまだ古いまま。その次のupdate()(loop()の
+// delay(10)を挟むためブロック明けから最短でも約20ms後)でようやくdebounceの
+// 猶予(5ms)を満たしcurrentStateが実際の状態に更新される。つまり「ブロック
+// 明け直後の1周期だけスキップする」だけでは足りず、実機で「単押しなのに2回分
+// 進む」不具合として残っていた(1周期分のスキップだと、まだ確定していない
+// 古いスナップショットのままgetHeldTime()だけが大きくなった状態を拾ってしまう)。
+//
+// 対策: 個別の呼び出し箇所ごとにフラグを立てる方式(以前の実装、漏れが起きやすい)
+// ではなく、`renderAndRefresh()`が実際にブロッキング描画を行うたびに
+// `lastBlockingRefreshMs`を更新するようにし、そこから`kPostBlockSettleMs`
+// (デバウンス確認に必要な最短時間に余裕を持たせた値)が経過するまでは、
+// どのブロッキング描画がきっかけであっても連続ナビの判定自体を一律で見送る。
+unsigned long lastBlockingRefreshMs = 0;
+constexpr unsigned long kPostBlockSettleMs = 40;
 
 int lastKnownBatteryPercent = -1;
 bool lastKnownBatteryCharging = false;
@@ -133,17 +163,18 @@ constexpr unsigned long kPowerSettleMs = 3000;
 // 最新状態を1回だけ強制的に描画する。
 bool pendingRedrawAfterSettle = false;
 
-// UP/DOWN(側面ボタン)は短押しでその画面本来の意味(フォーカス移動等)、
-// 長押し(appSettings.longPressMs以上)でCONFIRM/BACKのショートカットとして働く
-// (底面のCONFIRM/BACKまで手を伸ばさなくても側面ボタンだけで操作できるように、
-// というフィードバックを受けて追加。各画面のhandleButton()自体は変更せず、
-// 長押しを検出した時点でCONFIRM/BACKのボタンコードに置き換えて渡すだけなので、
-// FolderScreenのようにUP/DOWNへ独自の意味(ディレクトリ階層移動)を割り当てている
-// 画面とも衝突しない)。長押し判定はリリース時にgetHeldTime()を見て行うため、
-// 短押し自体の反応が遅延することはない(ダブルクリック方式だと2回目の入力を
-// 待つ必要があり反応が遅れるため、こちらを採用した)。判定時間自体は固定値では
-// なくSettingsScreenの「LONG PRESS」でユーザーが調整できる(appSettings.longPressMs、
-// 範囲200〜1500ms)。
+// UP/DOWN(側面ボタン)は以前、短押しでその画面本来の意味(フォーカス移動等)、
+// 長押し(appSettings.longPressMs以上)でCONFIRM/BACKのショートカットとして働いて
+// いた(片手操作用のフィードバックで追加した機能)。しかし「サイドボタンでの
+// 連打が遅い」というフィードバックを受け、UP/DOWNへ他の方向ボタンと同じ
+// 押しっぱなし連続ナビ(kContinuousNavStartMs等参照)を適用することにした際、
+// 同じ「長押し」という操作を連続ナビのCONFIRM/BACKショートカットと取り合って
+// しまう(特にDOWNは「連続スクロールしながら長押しを続けると、離した瞬間に
+// BACKでフォルダごと抜けてしまう」という分かりにくい組み合わせになる)ため、
+// UP/DOWNは純粋な移動キーに戻し、このショートカット自体を廃止した。
+// appSettings.longPressMsは引き続きTxtReaderScreen読書中のLEFT(短押し=
+// ブックマーク追加、長押し=一覧表示)の判定に使われている(main.cppのボタン
+// 処理forループ参照)。
 
 // X3の実機は縦持ちで使う機器だが、E-inkパネルはネイティブでは792x528(横長)の
 // フレームバッファしか持たない。UI層は常にこの528x792(縦長)の論理サイズで描画し、
@@ -213,7 +244,7 @@ bool tryBeginBinFont(XteinkBinFontImpl& impl, const char* path) {
 // (applySystemFontSettings()参照)。
 const Font* activeFont = &font;
 
-HomeScreen homeScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font);
+HomeScreen homeScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, battery, rtc, appSettings);
 FolderScreen folderScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, fileBrowser);
 TxtReaderScreen readerScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, appSettings);
 SettingsScreen settingsScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, rtc, battery, fileBrowser, appSettings);
@@ -221,7 +252,7 @@ HistoryScreen historyScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font);
 BluetoothScreen bluetoothScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, bleTransfer);
 FolderSyncScreen folderSyncScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, bleTransfer);
 LiveTextScreen liveTextScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, bleTransfer);
-StandbyScreen standbyScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, fileBrowser, display, appSettings);
+StandbyScreen standbyScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, fileBrowser, display, appSettings, battery, rtc);
 
 // 画面はまだホーム/フォルダ/読書/設定/履歴/Bluetooth/フォルダ同期/Liveテキスト/
 // 待機の9つしかないため、専用のScreenManager(スタック)は作らずここで素直に
@@ -386,6 +417,11 @@ void renderAndRefresh(EInkDisplay::RefreshMode mode) {
   uint8_t* fb = display.getFrameBuffer();
   currentScreen().render(fb, LOGICAL_WIDTH, LOGICAL_HEIGHT, *activeFont);
   display.displayBuffer(mode);
+  // このブロッキング呼び出しが実際に終わった時刻を記録する(lastBlockingRefreshMs
+  // 宣言部のコメント参照)。個別の呼び出し箇所ごとにフラグを立てる方式だと
+  // 対策漏れが起きやすいため、実際にブロッキング描画が起きる場所はここ1箇所に
+  // 集約し、ここで一律に記録することで連続ナビ側の判定を安全にする。
+  lastBlockingRefreshMs = millis();
 }
 
 // 電源が不安定な可能性がある間はE-ink描画をスキップする(画面の状態自体は
@@ -404,46 +440,8 @@ void applyBatteryState(int percent, bool charging) {
   if (percent < 0) return;
   lastKnownBatteryPercent = percent;
   lastKnownBatteryCharging = charging;
-  homeScreen.setBatteryPercent(percent);
-  homeScreen.setBatteryCharging(charging);
-  folderScreen.setBatteryPercent(percent);
-  folderScreen.setBatteryCharging(charging);
-  readerScreen.setBatteryPercent(percent);
-  readerScreen.setBatteryCharging(charging);
-  settingsScreen.setBatteryPercent(percent);
-  settingsScreen.setBatteryCharging(charging);
-  historyScreen.setBatteryPercent(percent);
-  historyScreen.setBatteryCharging(charging);
-  bluetoothScreen.setBatteryPercent(percent);
-  bluetoothScreen.setBatteryCharging(charging);
-  folderSyncScreen.setBatteryPercent(percent);
-  folderSyncScreen.setBatteryCharging(charging);
-  liveTextScreen.setBatteryPercent(percent);
-  liveTextScreen.setBatteryCharging(charging);
-  standbyScreen.setBatteryPercent(percent);
-  standbyScreen.setBatteryCharging(charging);
 }
 
-// ホーム画面のステータスバーに時刻("HH:MM")を反映する(設定でONの場合のみ)。
-// 変化した場合のみホーム画面が表示中なら再描画する(バッテリー同様、無駄な
-// 部分更新を避ける)。
-void updateStatusBarClock() {
-  String newText;
-  if (appSettings.showClockInStatusBar && rtc.ready()) {
-    RtcDateTime dt;
-    if (rtc.readDateTime(dt)) {
-      const RtcDateTime local = addHoursToDateTime(dt, appSettings.timezoneOffsetHours);
-      char buf[8];
-      snprintf(buf, sizeof(buf), "%02u:%02u", local.hour, local.minute);
-      newText = buf;
-    }
-  }
-
-  if (newText == lastClockText) return;
-  lastClockText = newText;
-  homeScreen.setClockText(lastClockText.c_str());
-  if (activeScreen == ActiveScreen::kHome) safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
-}
 
 void logResetReason() {
   const esp_reset_reason_t reason = esp_reset_reason();
@@ -515,14 +513,13 @@ void setup() {
     Serial.println("[X3FW] SD card not detected (folder screen will show empty)");
   }
 
-  // BLEのGATTサーバー構築はSDアクセスを伴わないため初期化順序に制約はないが、
-  // アドバタイズ自体はBluetoothScreen/FolderSyncScreenを開いている間だけ行う
-  // (startAdvertising()/stopAdvertising()、main.cppのloop()側の画面遷移分岐参照)。
-  if (bleTransfer.begin()) {
-    Serial.printf("[X3FW] BLE ready: %s\n", bleTransfer.deviceName().c_str());
-  } else {
-    Serial.println("[X3FW] BLE init failed");
-  }
+  // begin()はデバイス名の計算だけを行う軽量な処理で、NimBLEDevice::init()自体は
+  // 呼ばない(ヒープを恒常的に数十KB規模で消費するため、Bluetooth/FolderSync/
+  // LiveTextのいずれかの画面を実際に開くまで遅延させる。BleTransferService::
+  // ensureStackReady()参照)。
+  bleTransfer.begin();
+  Serial.printf("[X3FW] BLE device name: %s (stack init deferred until first use)\n",
+                bleTransfer.deviceName().c_str());
 
   if (battery.begin()) {
     Serial.println("[X3FW] battery gauge (BQ27220) ready");
@@ -545,31 +542,23 @@ void setup() {
     Serial.println("[X3FW] battery gauge (BQ27220) not detected");
   }
 
-  if (rtc.begin()) {
-    Serial.printf("[X3FW] RTC (DS3231) ready, lostPower=%d\n", rtc.lostPower());
-    RtcDateTime dt;
-    if (rtc.readDateTime(dt)) {
-      Serial.printf("[X3FW] RTC time: %04u-%02u-%02u %02u:%02u:%02u\n",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+  if (appSettings.rtcEnabled) {
+    if (rtc.begin()) {
+      Serial.printf("[X3FW] RTC (DS3231) ready, lostPower=%d\n", rtc.lostPower());
+      RtcDateTime dt;
+      if (rtc.readDateTime(dt)) {
+        Serial.printf("[X3FW] RTC time: %04u-%02u-%02u %02u:%02u:%02u\n",
+                      dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+      } else {
+        Serial.println("[X3FW] RTC time read failed");
+      }
     } else {
-      Serial.println("[X3FW] RTC time read failed");
+      Serial.println("[X3FW] RTC (DS3231) not detected");
     }
   } else {
-    Serial.println("[X3FW] RTC (DS3231) not detected");
+    Serial.println("[X3FW] RTC disabled by settings");
   }
 
-  // 初回の時刻表示は直接セットする(updateStatusBarClock()はloop()での定期更新用で、
-  // 変化時に再描画も行ってしまうため、これから直後にFULL_REFRESHする起動時には使わない)。
-  if (appSettings.showClockInStatusBar && rtc.ready()) {
-    RtcDateTime dt;
-    if (rtc.readDateTime(dt)) {
-      const RtcDateTime local = addHoursToDateTime(dt, appSettings.timezoneOffsetHours);
-      char buf[8];
-      snprintf(buf, sizeof(buf), "%02u:%02u", local.hour, local.minute);
-      lastClockText = buf;
-      homeScreen.setClockText(buf);
-    }
-  }
 
   renderAndRefresh(EInkDisplay::FULL_REFRESH);
   Serial.println("[X3FW] initial frame drawn");
@@ -588,30 +577,36 @@ void loop() {
 
   if (pendingRedrawAfterSettle && !isPowerUnstable()) {
     pendingRedrawAfterSettle = false;
-    renderAndRefresh(EInkDisplay::FULL_REFRESH);
+    // StandbyScreenが画像表示中はrenderAndRefresh()を呼んではいけない
+    // (kBatteryCheckIntervalMs分岐の同種のコメント参照)。render()は画像表示中、
+    // 初回描画後は何もせずreturnするだけの実装のため、renderAndRefresh()内の
+    // display.clearScreen()で白紙化されたフレームバッファがそのままパネルに
+    // 送られ、表示中の写真が消えてしまう(USB接続状態の変化(電源不安定判定)が
+    // この保留を経由して起きた場合に発生する不具合として実機で確認された)。
+    const bool standbyShowingImage = activeScreen == ActiveScreen::kStandby && standbyScreen.isShowingImage();
+    if (!standbyShowingImage) {
+      renderAndRefresh(EInkDisplay::FULL_REFRESH);
+    } else if (Serial) {
+      // 切り分け用の診断ログ(待機画面の写真表示中に電源不安定判定の保留描画が
+      // スキップされたことを確認するため)。
+      Serial.println("[X3FW] standby: skipped pendingRedrawAfterSettle while showing image");
+    }
   }
 
   input.update();
 
   for (uint8_t b = 0; b <= InputManager::BTN_POWER; b++) {
-    uint8_t effectiveButton = b;
-
-    if (b == InputManager::BTN_UP || b == InputManager::BTN_DOWN) {
-      // 短押し/長押しの判定はボタンを離した瞬間にしかできないため、この2つだけ
-      // wasPressed()ではなくwasReleased()を見る(反応が「押した瞬間」から
-      // 「離した瞬間」にずれるだけで、短押し自体に待ち時間は発生しない)。
-      if (!input.wasReleased(b)) continue;
-      if (input.getHeldTime() >= appSettings.longPressMs) {
-        effectiveButton = (b == InputManager::BTN_UP) ? InputManager::BTN_CONFIRM : InputManager::BTN_BACK;
-      }
-    } else if (b == InputManager::BTN_LEFT && activeScreen == ActiveScreen::kReader &&
-               !readerScreen.isOverlayShown()) {
+    if (b == InputManager::BTN_LEFT && activeScreen == ActiveScreen::kReader &&
+        !readerScreen.isOverlayShown()) {
       // 読書画面(オーバーレイ非表示時)ではLEFTを「短押し=ブックマーク追加、
       // 長押し=ブックマーク一覧を開く」に割り当てる(TxtReaderScreen.hのクラス
-      // コメント参照)。UP/DOWNと同じ考え方でwasReleased()+getHeldTime()を使う。
-      // 通常のhandleButton()ディスパッチは経由せず、ここで直接呼んで次のボタンへ
-      // 進む(オーバーレイ表示中はこの分岐に入らないため、LEFTは下のelse節経由で
-      // 通常通りhandleButton()に渡り、フォーカス移動等に使われる)。
+      // コメント参照)。通常のhandleButton()ディスパッチは経由せず、ここで直接
+      // 呼んで次のボタンへ進む(オーバーレイ表示中はこの分岐に入らないため、
+      // LEFTは下のelse節経由で通常通りhandleButton()に渡り、フォーカス移動等に
+      // 使われる)。UP/DOWNはかつて同じ短押し/長押しの仕組みでCONFIRM/BACKの
+      // ショートカットとして働いていたが、「サイドボタンでの連打が遅い」という
+      // フィードバックを受けて純粋な移動キーに戻したため、この特殊扱いは
+      // LEFTのブックマーク機能にのみ残っている。
       if (!input.wasReleased(b)) continue;
       if (input.getHeldTime() >= appSettings.longPressMs) {
         readerScreen.openBookmarkList();
@@ -622,21 +617,21 @@ void loop() {
       }
       safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
       continue;
-    } else {
-      if (!input.wasPressed(b)) continue;
     }
+    if (!input.wasPressed(b)) continue;
 
-    if (Serial) {
-      if (effectiveButton != b) {
-        Serial.printf("[X3FW] button long-press: %s -> %s\n", InputManager::getButtonName(b),
-                      InputManager::getButtonName(effectiveButton));
-      } else {
-        Serial.printf("[X3FW] button pressed: %s (index=%u)\n", InputManager::getButtonName(effectiveButton),
-                      effectiveButton);
-      }
+    if (Serial) Serial.printf("[X3FW] button pressed: %s (index=%u)\n", InputManager::getButtonName(b), b);
+
+    lastListInputMs = millis();  // 下記kRedrawデバウンスの「無操作期間」判定用
+
+    const ScreenAction action = currentScreen().handleButton(b);
+
+    // kRedraw以外のアクションは画面遷移等それ自体が同期的にFULL_REFRESHするため、
+    // 保留中だった部分更新(pendingListRedraw)はもう意味が無く破棄する(そのまま
+    // 残すと、画面遷移後に無関係な1回分のFAST_REFRESHが余分に走ってしまう)。
+    if (action != ScreenAction::kRedraw && action != ScreenAction::kNone) {
+      pendingListRedraw = false;
     }
-
-    const ScreenAction action = currentScreen().handleButton(effectiveButton);
 
     // 待機画面で画像表示中にCONFIRMされると、通常のScreenAction経由ではなく
     // このフラグでディープスリープ突入が要求される(PowerManager::
@@ -748,9 +743,22 @@ void loop() {
       } else if (activeScreen == ActiveScreen::kHistory) {
         pathToOpen = historyScreen.pendingOpenFilePath();
       }
-      if (pathToOpen.length() > 0 && readerScreen.openFile(pathToOpen)) {
-        activeScreen = ActiveScreen::kReader;
-        safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+      if (pathToOpen.length() > 0) {
+        if (readerScreen.openFile(pathToOpen)) {
+          activeScreen = ActiveScreen::kReader;
+          safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+        } else {
+          // TxtReaderService::open()はヒープ逼迫時にstd::bad_allocを捕まえてfalseを
+          // 返す(デバイス全体のクラッシュを避けるための既存の設計、TxtReaderService.cpp
+          // 参照)。以前はここで何もしなかったため、ユーザーからは「CONFIRMを押しても
+          // 何も起きない」ように見えていた。開けなかったことを画面上でも分かるように
+          // し、原因の切り分け用にヒープ残量もログへ残す。
+          if (Serial) {
+            Serial.printf("[X3FW] openFile failed for \"%s\" (free heap=%u)\n", pathToOpen.c_str(),
+                          ESP.getFreeHeap());
+          }
+          safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
+        }
       }
     } else if (action == ScreenAction::kRedraw) {
       if (activeScreen == ActiveScreen::kSettings && settingsScreen.consumeFontSettingsChanged()) {
@@ -762,63 +770,96 @@ void loop() {
         applyMarkdownFontSettings();
         safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
       } else if (activeScreen == ActiveScreen::kStandby && standbyScreen.isShowingImage()) {
-        // 一覧表示から画像表示への遷移。4階調グレースケール表示は「まず白黒
-        // ベース画像を実際にパネルへ書き込み、続けてグレー階調を上乗せする」
-        // 2段階のディスプレイ書き込みが必須(EInkDisplay/README.md参照)で、
-        // 通常のrender()→displayBuffer()1回きりのパイプラインでは実現できない
-        // ため、safeRenderAndRefresh()を経由せずStandbyScreen側で完結する
-        // showImageGrayscale()を直接呼ぶ(電源不安定期間中はsafeRenderAndRefresh()
-        // と同じ理由で保留する)。
+        // 一覧表示から画像表示への遷移。デコード前に「LOADING...」を一度表示して
+        // から本番の画像を表示する2段階の書き込みが必要で、通常のrender()→
+        // displayBuffer()1回きりのパイプラインでは実現できないため、
+        // safeRenderAndRefresh()を経由せずStandbyScreen側で完結するshowImage()を
+        // 直接呼ぶ(電源不安定期間中はsafeRenderAndRefresh()と同じ理由で保留する)。
         if (isPowerUnstable()) {
           pendingRedrawAfterSettle = true;
         } else {
-          standbyScreen.showImageGrayscale();
+          standbyScreen.showImage();
         }
       } else {
-        // 部分更新(FAST_REFRESH)でちらつきを抑えて書き換える
+        // 部分更新(FAST_REFRESH)は同期的に呼ぶと連打時に後続のタップを取りこぼす
+        // (lastContinuousNavMs宣言部近くのpendingListRedrawコメント参照)ため、
+        // ここでは即座に描画せず保留する。実際の描画はループ末尾のデバウンス
+        // チェックが行う。
+        if (!pendingListRedraw) pendingListRedrawFirstMs = millis();
+        pendingListRedraw = true;
+      }
+    }
+  }
+
+  // 保留中の部分更新(pendingListRedraw)を、短い無操作期間が空いた時点、または
+  // 連打が続いても最悪kListRedrawMaxWaitMs経過した時点で実際に描画する
+  // (kListRedrawDebounceMs宣言部のコメント参照)。for文の外に置くことで、
+  // ボタン入力が無いloop()の周回でも(=連打が止まった直後も)判定が効く。
+  if (pendingListRedraw) {
+    const unsigned long now = millis();
+    const bool quiet = (now - lastListInputMs) >= kListRedrawDebounceMs;
+    const bool waitedTooLong = (now - pendingListRedrawFirstMs) >= kListRedrawMaxWaitMs;
+    if (quiet || waitedTooLong) {
+      pendingListRedraw = false;
+      // StandbyScreenが画像表示中はrenderAndRefresh()を呼んではいけない
+      // (kBatteryCheckIntervalMs分岐・pendingRedrawAfterSettle分岐の同種の
+      // コメント参照)。直前の方向キー操作で立ったpendingListRedrawが、
+      // StandbyScreenの一覧でCONFIRMを押して画像表示へ遷移した後まで消えずに
+      // 残ることがある(一覧画面のCONFIRM自体もkRedrawを返すため、680行目付近の
+      // 「kRedraw以外なら破棄する」処理では消えない)。画像表示への遷移
+      // (showImage())は数百ms〜数秒ブロッキングするため、ループに戻ってきた
+      // 時点でこのデバウンス条件(quiet/waitedTooLong)を無条件に満たしてしまい、
+      // 白紙化されたフレームバッファがdisplayBuffer(FAST_REFRESH)(電源オフ
+      // 引数なし)でそのまま送られ、写真が白紙で上書きされた上にパネルの電源も
+      // 再びオンのまま放置される不具合があった(実機で確認、真因はここだった)。
+      const bool standbyShowingImage = activeScreen == ActiveScreen::kStandby && standbyScreen.isShowingImage();
+      if (!standbyShowingImage) {
+        // このFAST_REFRESH自体が数百msブロッキングする(renderAndRefresh()が
+        // lastBlockingRefreshMsを更新する、下の連続ナビブロックのコメント参照)。
         safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
       }
     }
   }
 
-  // FolderScreenでのLEFT/RIGHT長押し中の自動連続ナビゲーション(lastContinuousNavMs・
-  // skipContinuousNavCheckOnce宣言部のコメント参照)。上のボタン処理forループとは
-  // 独立に、押されている「レベル」を直接見る。
+  // LEFT/RIGHT/UP/DOWN押しっぱなし中の自動連続ナビゲーション(lastContinuousNavMs・
+  // lastBlockingRefreshMs宣言部のコメント参照)。上のボタン処理forループとは
+  // 独立に、押されている「レベル」を直接見る。以前はFolderScreen+LEFT/RIGHTのみ
+  // だったが、「もっと軽い操作感にしてほしい・サイドボタンでの連打が遅い」という
+  // フィードバックを受け、全画面・4方向ボタンすべてに拡張した(UP/DOWNは同じ
+  // フィードバックを受けて長押しCONFIRM/BACKショートカットを廃止し純粋な移動
+  // キーに戻したため、この対象にできるようになった)。各画面のhandleButton()は
+  // 4方向ボタンに対してkRedrawまたはkNone以外を返さないことを確認済み(画面遷移
+  // 系のアクションは方向ボタンからは発生しない)。
   //
-  // 重要な注意点: InputManager::isPressed()/getHeldTime()は「直近のupdate()時点の
-  // スナップショット」であり、update()は毎loop()の先頭で1回しか呼ばれない。上の
-  // forループでLEFT/RIGHTの押下エッジ(wasPressed)がまさに処理された場合、そこから
-  // safeRenderAndRefresh()が数百ms(FAST_REFRESH)ブロッキングするが、その間
-  // update()は呼ばれないため、ブロック終了直後にここでisPressed()/getHeldTime()を
-  // 見ると「ブロックしていた時間がそのまま経過時間に加算された、古いスナップ
-  // ショット」を見てしまう。さらにInputManager側のデバウンスは「状態が変化した」
-  // ことを検知したupdate()呼び出しそのものでは確定させず、次のupdate()呼び出しで
-  // 確定させる作りのため、ブロッキング明け直後の1周期だけをスキップしても、
-  // その次の1周期でまだ「離されたことが反映されていない」ことがあり、実機で
-  // 「1回のタップで2回進む」不具合として残っていた。
-  // 対策: LEFT/RIGHTの押下エッジを処理した直後、および連続ナビ自体がリフレッシュを
-  // 行った直後は、次の1周期分だけ判定を丸ごと見送る(skipContinuousNavCheckOnceで
-  // 持ち越す)。
-  const bool leftRightJustPressedThisLoop =
-      input.wasPressed(InputManager::BTN_LEFT) || input.wasPressed(InputManager::BTN_RIGHT);
-  const bool skipThisTick = leftRightJustPressedThisLoop || skipContinuousNavCheckOnce;
-  skipContinuousNavCheckOnce = leftRightJustPressedThisLoop;
+  // ブロッキング描画直後は古いスナップショットを見てしまう問題(lastBlockingRefreshMs
+  // 宣言部のコメント参照)への対策として、直近のブロッキング描画からkPostBlockSettleMs
+  // 以内は判定自体を丸ごと見送る。
+  const bool recentlyBlocked = (millis() - lastBlockingRefreshMs) < kPostBlockSettleMs;
 
-  if (activeScreen == ActiveScreen::kFolder && !skipThisTick) {
+  // TxtReaderScreen読書中(オーバーレイ非表示)のLEFTだけは、上のボタン処理
+  // forループで短押し=ブックマーク追加・長押し=一覧表示という別の意味を持つ
+  // (main.cppの該当分岐参照)。この連続ナビがLEFTも対象にしてしまうと、保持中に
+  // 「前のページに戻る」が連続発火しつつ同時にブックマーク長押し判定も進むという
+  // 二重の意味になってしまうため、この状態でのLEFTだけ対象から除外する。
+  const bool leftReservedForBookmark =
+      activeScreen == ActiveScreen::kReader && !readerScreen.isOverlayShown();
+
+  if (!recentlyBlocked) {
     uint8_t continuousBtn = 0xFF;
     if (input.isPressed(InputManager::BTN_RIGHT)) {
       continuousBtn = InputManager::BTN_RIGHT;
-    } else if (input.isPressed(InputManager::BTN_LEFT)) {
+    } else if (!leftReservedForBookmark && input.isPressed(InputManager::BTN_LEFT)) {
       continuousBtn = InputManager::BTN_LEFT;
+    } else if (input.isPressed(InputManager::BTN_DOWN)) {
+      continuousBtn = InputManager::BTN_DOWN;
+    } else if (input.isPressed(InputManager::BTN_UP)) {
+      continuousBtn = InputManager::BTN_UP;
     }
     if (continuousBtn != 0xFF && input.getHeldTime() >= kContinuousNavStartMs &&
         millis() - lastContinuousNavMs >= kContinuousNavIntervalMs) {
       lastContinuousNavMs = millis();
-      const ScreenAction action = folderScreen.handleButton(continuousBtn);
-      if (action == ScreenAction::kRedraw) {
-        safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
-        skipContinuousNavCheckOnce = true;  // このリフレッシュ直後の1周期も同様に見送る
-      }
+      const ScreenAction action = currentScreen().handleButton(continuousBtn);
+      if (action == ScreenAction::kRedraw) safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
     } else if (continuousBtn == 0xFF) {
       lastContinuousNavMs = 0;  // 離されたら次の長押し判定に備えてリセット
     }
@@ -845,12 +886,20 @@ void loop() {
       }
     }
   }
-
-  if (millis() - lastClockCheckMs >= kClockCheckIntervalMs) {
-    lastClockCheckMs = millis();
-    updateStatusBarClock();
+  if (appSettings.rtcEnabled && activeScreen == ActiveScreen::kHome) {
+    if (millis() - lastClockCheckMs >= kClockCheckIntervalMs) {
+      lastClockCheckMs = millis();
+      RtcDateTime dt;
+      if (rtc.readDateTime(dt)) {
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%02u:%02u", dt.hour, dt.minute);
+        if (lastClockText != buf) {
+          lastClockText = buf;
+          safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
+        }
+      }
+    }
   }
-
   // Bluetooth/FolderSync画面はボタン入力を伴わずに状態が変わる(接続/切断・
   // ファイル受信の進捗)ため、バッテリー・時計と同様に一定間隔でポーリングし、
   // 変化があった場合のみ再描画する。

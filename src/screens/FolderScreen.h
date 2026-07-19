@@ -1,11 +1,11 @@
 #pragma once
+#include <algorithm>
 #include <vector>
 
 #include "../core/FileBrowserService.h"
 #include "../ui/FooterGuide.h"
 #include "../ui/Screen.h"
 #include "../ui/SettingRow.h"
-#include "../ui/StatusBar.h"
 
 // SDカードのファイル/フォルダ一覧を表示する画面。setRoot()で設定したルートに
 // 応じて2箇所から使い回される: ホーム画面「FOLDER」("/User"、日常使うユーザー
@@ -57,17 +57,19 @@ class FolderScreen : public Screen {
   // 開くべきファイルの絶対パスを取得する。
   const String& pendingOpenFilePath() const { return pendingOpenPath_; }
 
-  // main.cpp側がBatteryServiceから読み取った最新の残量・充電状態をここで反映する。
-  void setBatteryPercent(int percent) { statusBar_.setBatteryPercent(percent); }
-  void setBatteryCharging(bool charging) { statusBar_.setBatteryCharging(charging); }
-
  private:
   static constexpr int kMaxVisibleRows = 24;  // 1ページに表示できる行数の上限(配列確保用)
-  static constexpr int kStatusBarHeight = 32;
   static constexpr int kFooterHeight = 32;
-  static constexpr int kRowPadding = 10;
+  // 「リストの視認性を上げてほしい」というフィードバックを受けて拡大(以前は10)。
+  static constexpr int kRowPadding = 30;
 
-  static int RowHeight(const Font& font) { return font.lineHeight() + kRowPadding; }
+  // アイコン(SettingRow::kIconPx、40px)と本文フォントの行高さのうち大きい方を
+  // 基準にする。フォントサイズが小さい設定(TEXT SIZE)でもアイコンが行からはみ
+  // 出さないようにするため(std::maxのため<algorithm>が必要、FolderScreen.cppで
+  // 既にインクルード済み)。
+  static int RowHeight(const Font& font) {
+    return std::max(font.lineHeight(), SettingRow::kIconPx) + kRowPadding;
+  }
 
   void reloadCurrentDirectory();
   void layoutRows(const Font& font);
@@ -88,7 +90,6 @@ class FolderScreen : public Screen {
   int focusIndex_ = 0;  // entries_内のグローバルインデックス
   int rowsPerPage_ = 1;
 
-  StatusBar statusBar_;
   FooterGuide footer_;
   FooterGuideItem footerItems_[4];
   char pageLabel_[16] = "1/1";
