@@ -32,6 +32,25 @@ class StandbyScreen : public Screen {
   // 再スキャンし、画像表示中の状態があればリセットしてリスト表示に戻す。
   void onEnter();
 
+  // AutoStandby(5分無操作)・電源キー長押しから呼ばれる、一覧を経由せず直接
+  // ランダムな1枚を選んで画像表示モードへ入るための入口。/System/standbyを
+  // 再スキャンし、候補が1件も無ければ何もせずfalseを返す(呼び出し側はStandby
+  // 突入自体を諦める)。候補が2件以上ある場合は直前にこの経路で表示した画像
+  // (lastQuickIndex_)と連続しないようインデックスをずらす。trueを返した場合、
+  // 呼び出し側は続けてshowImage()を呼んで実際の描画を行う必要がある。
+  bool enterQuickRandom();
+
+  // enterQuickRandom()経由(一覧を経由しない自動/電源キー由来)で画像表示中かどうか。
+  // handleButton()がBACK押下時の戻り先(一覧 or ホーム直行)を切り替えるのに使う。
+  bool isQuickMode() const { return quickMode_; }
+
+  // 画像表示モードに入った後、実際にshowImage()が呼ばれて描画済みかどうか。
+  // 電源不安定判定でpendingRedrawAfterSettleに描画を保留した場合、main.cpp側が
+  // 保留消化時にこれを見てshowImage()を呼び直す必要があるかどうかを判定する
+  // (isShowingImage()だけではmode_がkShowingImageになった直後の未描画状態と
+  // 区別できないため)。
+  bool isImageDrawn() const { return imageDrawn_; }
+
   void render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) override;
   ScreenAction handleButton(uint8_t buttonIndex) override;
 
@@ -93,6 +112,10 @@ class StandbyScreen : public Screen {
   Mode mode_ = Mode::kList;
   std::vector<String> jpegFiles_;
   int focusIndex_ = 0;
+  // enterQuickRandom()経由で画像表示中かどうか(一覧を経由した通常フローとの区別)。
+  bool quickMode_ = false;
+  // enterQuickRandom()の連続回避用。直近に選んだfocusIndex_を覚えておく(-1=未選択)。
+  int lastQuickIndex_ = -1;
   // render()は呼ばれるたびに画像を描き直す必要はない(重いデコード処理のため、
   // 画像表示モードに入った最初の1回だけ実行する)。
   bool imageDrawn_ = false;

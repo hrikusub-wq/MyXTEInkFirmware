@@ -4,6 +4,9 @@
 # ローカルクローンで利用(README参照)。gitでは追跡しない
 open-x4-sdk/
 
+#正直私の作業報告よりAIが作ったREADMEのほうが有用。除外。
+docs/
+
 # Antigravity(外部AIツール)の作業報告書。リポジトリの履歴としては不要。
 Antigravity/
 

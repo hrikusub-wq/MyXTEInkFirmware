@@ -85,7 +85,11 @@ class CjkFontImpl : public Font {
   int ascender_ = 0;
   int advanceY_ = 1;
 
-  static constexpr size_t kCacheCapacity = 200;
+  // 最大容量は250(約40KB強)。Bluetooth(NimBLE)起動時は空きRAMが~34KBに減るため、
+  // fetchGlyph側で空きヒープを見て自動的に50(約8KB)まで縮小し、クラッシュを防ぎつつ
+  // 普段のページめくり速度(キャッシュヒット率)を最大化する。
+  static constexpr size_t kMaxCacheCapacity = 250;
+  static constexpr size_t kMinCacheCapacity = 50;
   mutable std::vector<CachedGlyph> cache_;
   // ヒープ逼迫でグリフ確保に失敗した旨のログは、文字ごとに何度も出すと(特に
   // 大量の文字を含むファイルで)Serial出力自体が重く体感の「フリーズ」を

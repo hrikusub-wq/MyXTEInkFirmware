@@ -3,6 +3,8 @@
 #include <InputManager.h>
 #include <JPEGDEC.h>
 #include <SDCardManager.h>
+#include <esp_system.h>
+#include "../gfx/Wallpaper.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -189,8 +191,8 @@ inline int averagedGammaGray(const JPEGDRAW* pDraw, int lx, int ly, int colSpan,
 //   - kBlackMaxを上げる/kWhiteMinを下げる → 暗部・明部の網点が早めに黒/白へ寄る
 //     (よりくっきり・コントラスト重視)
 //   - kBlackMaxを下げる/kWhiteMinを上げる → 中間調の網点パターンがより滑らかになる
-constexpr int kBlackMax = 80;  // これ以下の輝度は黒(level 0)
-constexpr int kWhiteMin  = 250;  // これ以上の輝度は白(level 3)
+constexpr int kBlackMax = 30;  // これ以下の輝度は黒(level 0)
+constexpr int kWhiteMin  = 226;  // これ以上の輝度は白(level 3)
 
 inline int quantizeLevel(int gray) {
   if (gray <= kBlackMax) return 0;
@@ -436,7 +438,27 @@ void StandbyScreen::onEnter() {
   mode_ = Mode::kList;
   imageDrawn_ = false;
   sleepRequested_ = false;
+  quickMode_ = false;
   reloadFileList();
+}
+
+bool StandbyScreen::enterQuickRandom() {
+  reloadFileList();
+  const int total = static_cast<int>(jpegFiles_.size());
+  if (total == 0) return false;
+
+  int idx = static_cast<int>(esp_random() % static_cast<uint32_t>(total));
+  if (total > 1 && idx == lastQuickIndex_) {
+    idx = (idx + 1) % total;  // 直前と同じ画像が連続で選ばれるのを避ける
+  }
+  lastQuickIndex_ = idx;
+  focusIndex_ = idx;
+
+  mode_ = Mode::kShowingImage;
+  imageDrawn_ = false;
+  sleepRequested_ = false;
+  quickMode_ = true;
+  return true;
 }
 
 bool StandbyScreen::consumeSleepRequested() {
@@ -487,6 +509,7 @@ void StandbyScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, con
       FrameBufferOps::fillRect(fb, fbWidth, fbHeight, 0, 0, fbWidth, fbHeight, false);  // 白紙に戻してから描画
       const String path = String(kStandbyDir) + "/" + jpegFiles_[focusIndex_];
       decodeAndDrawImage(path, fbWidth, fbHeight, fb, appSettings_.standbyGammaPercent);
+      saveWallpaper(fb);
       drawOverlays(fb, fbWidth, fbHeight, font);
       imageDrawn_ = true;
     }
@@ -546,12 +569,14 @@ void StandbyScreen::showImage() {
   display_.clearScreen();
   FrameBufferOps::fillRect(fb, fbWidth_, fbHeight_, 0, 0, fbWidth_, fbHeight_, false);
   decodeAndDrawImage(path, fbWidth_, fbHeight_, fb, appSettings_.standbyGammaPercent);
+  g_wallpaperValid = true;
   // turnOffScreen=trueでパネルのアナログ電源(チャージポンプ・VCOM等)を明示的に
   // 遮断する(EInkDisplay/README.mdが「プログラム終了前に必ずパネルを電源オフし
   // 画像をlock inすること」と明記している)。この画面は表示後ユーザーがCONFIRMを
   // 押すまで何秒でも表示し続けるため、通電したままにしないための保険。次に一覧へ
   // 戻る等でdisplayBuffer()を呼んだ際は、isScreenOnを見て自動的に再通電するため、
   // 呼び出し側で追加の対応は不要(EInkDisplay.cppのisScreenOnチェック参照)。
+  saveWallpaper(fb);
   drawOverlays(fb, fbWidth_, fbHeight_, *font_);
   display_.displayBuffer(EInkDisplay::FULL_REFRESH, true);
   imageDrawn_ = true;
@@ -564,6 +589,12 @@ ScreenAction StandbyScreen::handleButton(uint8_t buttonIndex) {
       return ScreenAction::kNone;  // main.cpp側がconsumeSleepRequested()を見て処理する
     }
     if (buttonIndex == InputManager::BTN_BACK) {
+      if (quickMode_) {
+        // 一覧を経由せず直接ランダム表示に入った(AutoStandby/電源キー長押し)場合は
+        // 一覧に戻さず、main.cppのkNavigateBack+kStandbyの既存処理でそのままホームへ戻す。
+        quickMode_ = false;
+        return ScreenAction::kNavigateBack;
+      }
       mode_ = Mode::kList;
       imageDrawn_ = false;
       return ScreenAction::kRedraw;

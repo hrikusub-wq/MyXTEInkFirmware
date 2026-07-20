@@ -23,7 +23,12 @@ void fillRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
 
 // 角丸矩形を塗りつぶす。rは角の半径(px)。
 void fillRoundRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
-                   int x, int y, int w, int h, int r, bool black);
+                   int x, int y, int w, int h, int radius, bool black);
+
+// 指定した矩形(角丸)を50%の市松模様で半透明に塗りつぶす。
+// (背景の壁紙の上にUI要素を重ねる際の視認性確保用。既存の画素を半分残し、半分を白または黒で上書きする)
+void fillRoundRectDither(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                         int x, int y, int w, int h, int radius, bool black);
 
 // 矩形範囲に薄いドットパターン(4px中1px黒)を敷き、疑似的な「グレー」背景を作る。
 // パネルは1bpp(白黒2値)のため真のグレー階調は表現できないが、市松状のドットで

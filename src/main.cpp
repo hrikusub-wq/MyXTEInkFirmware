@@ -30,7 +30,9 @@
 #include "core/SettingsService.h"
 #include "core/TxtReaderService.h"
 #include "gfx/CjkFontImpl.h"
+#include "gfx/FrameBufferOps.h"
 #include "gfx/MiniFontImpl.h"
+#include "gfx/Wallpaper.h"
 #include "gfx/XteinkBinFontImpl.h"
 #include "screens/BluetoothScreen.h"
 #include "screens/FolderScreen.h"
@@ -271,7 +273,10 @@ enum class ActiveScreen {
 ActiveScreen activeScreen = ActiveScreen::kHome;
 // kBluetoothはHome/Settingsのどちらからでも開けるため、BACKで戻る先を覚えておく
 // (trueならHomeから、falseならSettingsから開いた)。
-bool bluetoothEnteredFromHome = false;
+ActiveScreen bluetoothReturnScreen = ActiveScreen::kHome;
+unsigned long lastAutoStandbyActivityMs = 0;
+unsigned long lastStandbyImageActivityMs = 0;
+constexpr unsigned long kStandbyAutoSleepMs = 2UL * 60UL * 1000UL;  // 2分
 // kFolderも同様に2箇所から開ける(Home「FOLDER」="/User"、Settings「SYSTEM」=
 // "/System")。trueならSettingsから開いた(BACKでSettingsへ戻す)、falseなら
 // Homeから開いた(BACKでHomeへ戻す)。
@@ -416,6 +421,11 @@ void renderAndRefresh(EInkDisplay::RefreshMode mode) {
   display.clearScreen();
   uint8_t* fb = display.getFrameBuffer();
   currentScreen().render(fb, LOGICAL_WIDTH, LOGICAL_HEIGHT, *activeFont);
+
+  if (Serial) {
+    Serial.printf("[X3FW] render: free_heap=%lu\n", (unsigned long)ESP.getFreeHeap());
+  }
+
   display.displayBuffer(mode);
   // このブロッキング呼び出しが実際に終わった時刻を記録する(lastBlockingRefreshMs
   // 宣言部のコメント参照)。個別の呼び出し箇所ごとにフラグを立てる方式だと
@@ -474,6 +484,7 @@ void setup() {
   PowerManager::releaseGpioHoldOnBoot(BATTERY_LATCH_PIN);
 
   Serial.begin(115200);
+  lastAutoStandbyActivityMs = millis();
   delay(300);  // USB CDCの接続待ち(接続されていなくても先へ進む)
   lastUsbConnected = static_cast<bool>(Serial);
   Serial.println("[X3FW] boot: Xteink X3 custom firmware (phase 3)");
@@ -490,6 +501,8 @@ void setup() {
   // 初期化する(先にSDを初期化するとバスがまだ整っておらず検出に失敗した)。
   if (fileBrowser.begin()) {
     Serial.println("[X3FW] SD card ready");
+    initWallpaper();
+    
     String lastBookPath;
     int lastBookPercent = 0;
     if (TxtReaderService::readLastBook(lastBookPath, lastBookPercent)) {
@@ -566,7 +579,53 @@ void setup() {
   Serial.printf("[X3FW] heap: setup complete, free=%u\n", ESP.getFreeHeap());
 }
 
+void enterStandbyDeepSleep() {
+  if (Serial) Serial.println("[X3FW] entering deep sleep standby");
+  // E-inkパネル自体もアナログ電源・クロックを落とし、コントローラICを
+  // 低消費電力モードへ入れておく(EInkDisplay::deepSleep()参照)。これを
+  // 呼ばないと、ESP32コア自体はディープスリープに入っていてもパネルの
+  // コントローラが通常のアクティブ状態のまま給電され続け、バッテリーを
+  // 消費し続けてしまう(実機で「2時間で12%減る」異常消費として確認された
+  // 不具合、真のディープスリープなら数十µAのはずが数十mA相当だった)。
+  display.deepSleep();
+  PowerManager::enterDeepSleepStandby(BATTERY_LATCH_PIN, InputManager::POWER_BUTTON_PIN);
+}
+
 void loop() {
+
+  // スタンバイで写真が表示されたまま2分操作が無ければ、CONFIRMを押したのと同じ
+  // 扱いで自動的にディープスリープへ移行する(E-inkは電源を切っても表示を保持
+  // するため、画面の見た目は変わらない)。AutoStandby・電源キー長押しは写真の
+  // 自動表示までしか行わないため、これが無いと「表示したまま朝までCPUがフル
+  // 稼働し続ける」放置シナリオが再発する(バッテリー消費相談の原因調査を参照)。
+  if (activeScreen == ActiveScreen::kStandby && standbyScreen.isShowingImage() &&
+      millis() - lastStandbyImageActivityMs >= kStandbyAutoSleepMs) {
+    enterStandbyDeepSleep();
+  }
+
+  // 5分無操作でAutoStandby (ホーム画面限定)
+  if (activeScreen == ActiveScreen::kHome) {
+    if (millis() - lastAutoStandbyActivityMs > 5 * 60 * 1000) {
+      if (Serial) Serial.println("[X3FW] AutoStandby triggered due to 5 min inactivity");
+      if (standbyScreen.enterQuickRandom()) {
+        activeScreen = ActiveScreen::kStandby;
+        // showImage()を経由させる(LOADING表示→デコード→turnOffScreen=trueで
+        // パネルのアナログ電源を明示的に落とす、までの一連の処理)。ここを
+        // safeRenderAndRefresh()直呼びにすると、そのフォールバック経路の
+        // render()ではturnOffScreen=trueが実行されず、パネルへの通電が
+        // 落ちないまま(実機で「2時間で12%消費」と確認された不具合と同じ経路)
+        // 表示され続けてしまう。
+        if (isPowerUnstable()) {
+          pendingRedrawAfterSettle = true;
+        } else {
+          standbyScreen.showImage();
+          lastStandbyImageActivityMs = millis();
+        }
+      }
+      lastAutoStandbyActivityMs = millis();
+    }
+  }
+
   checkUsbConnectionChange();
 
   // BLEコールバックが溜めた受信データ・コマンドをここで処理する(SD書き込みは
@@ -586,6 +645,13 @@ void loop() {
     const bool standbyShowingImage = activeScreen == ActiveScreen::kStandby && standbyScreen.isShowingImage();
     if (!standbyShowingImage) {
       renderAndRefresh(EInkDisplay::FULL_REFRESH);
+    } else if (!standbyScreen.isImageDrawn()) {
+      // mode_がkShowingImageになった直後、電源不安定でshowImage()自体の呼び出しを
+      // 保留していたケース。isShowingImage()だけでは「未描画のまま保留」と
+      // 「既に描画済み」を区別できず、後者だと誤判定してshowImage()が永久に
+      // 呼ばれなくなる(画面が真っ白/前の画面のまま固まる)不具合があったため、
+      // isImageDrawn()も合わせて見て、未描画なら保留していた描画をここで行う。
+      standbyScreen.showImage();
     } else if (Serial) {
       // 切り分け用の診断ログ(待機画面の写真表示中に電源不安定判定の保留描画が
       // スキップされたことを確認するため)。
@@ -596,6 +662,47 @@ void loop() {
   input.update();
 
   for (uint8_t b = 0; b <= InputManager::BTN_POWER; b++) {
+    if (b == InputManager::BTN_POWER) {
+      if (!input.wasReleased(b)) continue;
+      if (input.getHeldTime() >= appSettings.longPressMs) {
+        if (activeScreen == ActiveScreen::kStandby) {
+          activeScreen = ActiveScreen::kHome;
+          safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+        } else {
+          // Bluetooth/FolderSync画面から離れる場合はアドバタイズを止める
+          // (通常のBACK処理と同様、動いたまま他画面へ遷移しないようにする)。
+          if (activeScreen == ActiveScreen::kBluetooth || activeScreen == ActiveScreen::kFolderSync) {
+            bleTransfer.stopAdvertising();
+          }
+          if (standbyScreen.enterQuickRandom()) {
+            activeScreen = ActiveScreen::kStandby;
+            // showImage()を経由させる(AutoStandby側の同種のコメント参照。
+            // safeRenderAndRefresh()直呼びだとパネルの電源断が実行されない)。
+            if (isPowerUnstable()) {
+              pendingRedrawAfterSettle = true;
+            } else {
+              standbyScreen.showImage();
+              lastStandbyImageActivityMs = millis();
+            }
+          }
+          // /System/standbyに画像が1枚も無い場合は何もしない(現在の画面のまま)。
+        }
+      } else {
+        if (activeScreen == ActiveScreen::kStandby) {
+          activeScreen = ActiveScreen::kHome;
+          safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+        } else if (activeScreen != ActiveScreen::kBluetooth) {
+          bluetoothReturnScreen = activeScreen;
+          activeScreen = ActiveScreen::kBluetooth;
+          bleTransfer.clearError();
+          bleTransfer.startAdvertising();
+          safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+        }
+      }
+      lastAutoStandbyActivityMs = millis();
+      continue;
+    }
+
     if (b == InputManager::BTN_LEFT && activeScreen == ActiveScreen::kReader &&
         !readerScreen.isOverlayShown()) {
       // 読書画面(オーバーレイ非表示時)ではLEFTを「短押し=ブックマーク追加、
@@ -623,6 +730,8 @@ void loop() {
     if (Serial) Serial.printf("[X3FW] button pressed: %s (index=%u)\n", InputManager::getButtonName(b), b);
 
     lastListInputMs = millis();  // 下記kRedrawデバウンスの「無操作期間」判定用
+    lastAutoStandbyActivityMs = millis(); // 無操作タイマーリセット
+    lastStandbyImageActivityMs = millis(); // スタンバイ画像表示中のタイムアウトリセット
 
     const ScreenAction action = currentScreen().handleButton(b);
 
@@ -638,23 +747,15 @@ void loop() {
     // enterDeepSleepStandby()は戻らない関数のため、StandbyScreen側では完結
     // させられない。StandbyScreen.h参照)。
     if (activeScreen == ActiveScreen::kStandby && standbyScreen.consumeSleepRequested()) {
-      if (Serial) Serial.println("[X3FW] entering deep sleep standby");
-      // E-inkパネル自体もアナログ電源・クロックを落とし、コントローラICを
-      // 低消費電力モードへ入れておく(EInkDisplay::deepSleep()参照)。これを
-      // 呼ばないと、ESP32コア自体はディープスリープに入っていてもパネルの
-      // コントローラが通常のアクティブ状態のまま給電され続け、バッテリーを
-      // 消費し続けてしまう(実機で「2時間で12%減る」異常消費として確認された
-      // 不具合、真のディープスリープなら数十µAのはずが数十mA相当だった)。
-      display.deepSleep();
-      PowerManager::enterDeepSleepStandby(BATTERY_LATCH_PIN, InputManager::POWER_BUTTON_PIN);
+      enterStandbyDeepSleep();
     }
 
     if (action == ScreenAction::kNavigateForward && activeScreen == ActiveScreen::kHome) {
       if (homeScreen.lastActivatedButton() == HomeScreen::GridButton::kSettings) {
         activeScreen = ActiveScreen::kSettings;
       } else if (homeScreen.lastActivatedButton() == HomeScreen::GridButton::kBluetooth) {
+        bluetoothReturnScreen = ActiveScreen::kHome;
         activeScreen = ActiveScreen::kBluetooth;
-        bluetoothEnteredFromHome = true;
         bleTransfer.clearError();  // 前回のエラー表示を持ち越さない
         bleTransfer.startAdvertising();
       } else if (homeScreen.lastActivatedButton() == HomeScreen::GridButton::kStandby) {
@@ -678,8 +779,8 @@ void loop() {
       safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
     } else if (action == ScreenAction::kNavigateForward && activeScreen == ActiveScreen::kSettings) {
       if (settingsScreen.lastNavigateTarget() == SettingsScreen::NavigateTarget::kBluetooth) {
+        bluetoothReturnScreen = ActiveScreen::kSettings;
         activeScreen = ActiveScreen::kBluetooth;
-        bluetoothEnteredFromHome = false;
         bleTransfer.clearError();  // 前回のエラー表示を持ち越さない
         bleTransfer.startAdvertising();
       } else if (settingsScreen.lastNavigateTarget() == SettingsScreen::NavigateTarget::kSystemFolder) {
@@ -717,11 +818,9 @@ void loop() {
         activeScreen = ActiveScreen::kHome;
         safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
       } else if (activeScreen == ActiveScreen::kBluetooth || activeScreen == ActiveScreen::kFolderSync) {
-        // kFolderSyncは常にSettingsScreenから開くため設定画面へ戻す。kBluetoothは
-        // HomeScreenからも開けるため、開いた場所(bluetoothEnteredFromHome)へ戻す。
         if (activeScreen == ActiveScreen::kBluetooth) bleTransfer.stopAdvertising();
-        activeScreen = (activeScreen == ActiveScreen::kBluetooth && bluetoothEnteredFromHome)
-                           ? ActiveScreen::kHome
+        activeScreen = (activeScreen == ActiveScreen::kBluetooth)
+                           ? bluetoothReturnScreen
                            : ActiveScreen::kSettings;
         safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
       } else if (activeScreen == ActiveScreen::kReader) {
@@ -779,6 +878,7 @@ void loop() {
           pendingRedrawAfterSettle = true;
         } else {
           standbyScreen.showImage();
+          lastStandbyImageActivityMs = millis();
         }
       } else {
         // 部分更新(FAST_REFRESH)は同期的に呼ぶと連打時に後続のタップを取りこぼす

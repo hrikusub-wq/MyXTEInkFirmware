@@ -1,6 +1,7 @@
 #include "HomeGridButton.h"
 
 #include "../gfx/FrameBufferOps.h"
+#include "../gfx/Wallpaper.h"
 
 namespace {
 constexpr int kIconPx = static_cast<int>(IconSize::kLarge);
@@ -16,6 +17,8 @@ void HomeGridButton::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, co
   // 選択の主張が強すぎるというフィードバックを受けてグレーに変更した)。
   if (selected_) {
     FrameBufferOps::fillRectLightGrayDither(fb, fbWidth, fbHeight, bounds_.x, bounds_.y, bounds_.w, bounds_.h);
+  } else if (g_wallpaperValid) {
+    FrameBufferOps::fillRoundRectDither(fb, fbWidth, fbHeight, bounds_.x + 4, bounds_.y + 4, bounds_.w - 8, bounds_.h - 8, 12, false);
   }
 
   const int iconX = bounds_.x + (bounds_.w - kIconPx) / 2;

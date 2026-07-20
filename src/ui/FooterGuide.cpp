@@ -1,6 +1,7 @@
 #include "FooterGuide.h"
 
 #include "../gfx/FrameBufferOps.h"
+#include "../gfx/Wallpaper.h"
 
 namespace {
 constexpr int kPadding = 8;
@@ -10,6 +11,10 @@ constexpr int kSlotCount = 4;  // BACK/CONFIRM/LEFT/RIGHT (底面の物理ボタ
 }  // namespace
 
 void FooterGuide::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) const {
+  if (g_wallpaperValid) {
+    FrameBufferOps::fillRoundRectDither(fb, fbWidth, fbHeight, bounds_.x, bounds_.y + 1, bounds_.w, bounds_.h - 1, 0, false);
+  }
+
   // 上端に区切り線
   FrameBufferOps::drawHLine(fb, fbWidth, fbHeight, bounds_.x, bounds_.y, bounds_.w);
 

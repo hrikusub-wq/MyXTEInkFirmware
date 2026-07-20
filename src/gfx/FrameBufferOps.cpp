@@ -84,6 +84,52 @@ void fillRoundRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
   }
 }
 
+void fillRoundRectDither(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                         int x, int y, int w, int h, int r, bool black) {
+  if (r <= 0) {
+    for (int yy = y; yy < y + h; yy++) {
+      for (int xx = x; xx < x + w; xx++) {
+        if (((xx + yy) & 1) == 0) {
+          if (black) setBlackPixel(fb, fbWidth, fbHeight, xx, yy);
+          else       setWhitePixel(fb, fbWidth, fbHeight, xx, yy);
+        }
+      }
+    }
+    return;
+  }
+  
+  // r>0 の場合(角丸の切り落とし判定付き)
+  for (int yy = y; yy < y + h; yy++) {
+    for (int xx = x; xx < x + w; xx++) {
+      if (((xx + yy) & 1) != 0) continue;
+      
+      bool inside = true;
+      if (xx < x + r && yy < y + r) {
+        int dx = (x + r) - xx;
+        int dy = (y + r) - yy;
+        if (dx * dx + dy * dy > r * r) inside = false;
+      } else if (xx >= x + w - r && yy < y + r) {
+        int dx = xx - (x + w - 1 - r);
+        int dy = (y + r) - yy;
+        if (dx * dx + dy * dy > r * r) inside = false;
+      } else if (xx < x + r && yy >= y + h - r) {
+        int dx = (x + r) - xx;
+        int dy = yy - (y + h - 1 - r);
+        if (dx * dx + dy * dy > r * r) inside = false;
+      } else if (xx >= x + w - r && yy >= y + h - r) {
+        int dx = xx - (x + w - 1 - r);
+        int dy = yy - (y + h - 1 - r);
+        if (dx * dx + dy * dy > r * r) inside = false;
+      }
+      
+      if (inside) {
+        if (black) setBlackPixel(fb, fbWidth, fbHeight, xx, yy);
+        else       setWhitePixel(fb, fbWidth, fbHeight, xx, yy);
+      }
+    }
+  }
+}
+
 void fillRectLightGrayDither(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                              int x, int y, int w, int h) {
   // 2x2のパターンのうち1マスだけ黒にする(4px中1px=約25%被覆率)。50%の市松模様

@@ -250,7 +250,10 @@ const CjkFontImpl::CachedGlyph* CjkFontImpl::fetchGlyph(uint32_t codepoint) cons
       }
     }
 
-    if (cache_.size() >= kCacheCapacity) cache_.erase(cache_.begin());
+    const size_t maxCache = (ESP.getFreeHeap() > 45000) ? kMaxCacheCapacity : kMinCacheCapacity;
+    while (cache_.size() >= maxCache && !cache_.empty()) {
+      cache_.erase(cache_.begin());
+    }
     cache_.push_back(std::move(g));
   } catch (const std::bad_alloc&) {
     if (!loggedHeapExhausted_) {

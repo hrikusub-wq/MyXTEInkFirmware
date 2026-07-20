@@ -3,6 +3,7 @@
 #include <InputManager.h>
 
 #include "../gfx/FrameBufferOps.h"
+#include "../gfx/Wallpaper.h"
 #include "../ui/BatteryDateOverlay.h"
 
 namespace {
@@ -87,6 +88,10 @@ void HomeScreen::drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbH
   const int iconX = margin;
   const int iconY = margin + 16;
 
+  if (g_wallpaperValid) {
+    FrameBufferOps::fillRoundRectDither(fb, fbWidth, fbHeight, iconX - 8, iconY - 8, fbWidth - (iconX - 8) * 2, iconH + 16, 12, false);
+  }
+
   // 本のプレースホルダーアイコン: 表紙の矩形+背表紙の縦線
   FrameBufferOps::drawRectOutline(fb, fbWidth, fbHeight, iconX, iconY, iconW, iconH, 2);
   FrameBufferOps::fillRect(fb, fbWidth, fbHeight, iconX + 12, iconY, 2, iconH, true);
@@ -111,7 +116,10 @@ void HomeScreen::drawBookPlaceholder(uint8_t* fb, uint16_t fbWidth, uint16_t fbH
 }
 
 void HomeScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const Font& font) {
-  // statusBar_.render removed
+  if (g_wallpaperValid) {
+    loadWallpaper(fb);
+  }
+
   drawBookPlaceholder(fb, fbWidth, fbHeight, font);
   for (auto& button : buttons_) {
     button.render(fb, fbWidth, fbHeight, font);
@@ -125,7 +133,7 @@ void HomeScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const 
     localDt = addHoursToDateTime(dt, appSettings_.timezoneOffsetHours);
     pDt = &localDt;
   }
-  BatteryDateOverlay::drawBatteryAndDate(fb, fbWidth, fbHeight, font, static_cast<int>(fbWidth) - 16, 16, battery_.readPercent(), battery_.isCharging(), pDt, false, true);
+  BatteryDateOverlay::drawBatteryAndDate(fb, fbWidth, fbHeight, font, static_cast<int>(fbWidth) - 16, 16, battery_.readPercent(), battery_.isCharging(), pDt, g_wallpaperValid, true);
 }
 
 ScreenAction HomeScreen::handleButton(uint8_t buttonIndex) {

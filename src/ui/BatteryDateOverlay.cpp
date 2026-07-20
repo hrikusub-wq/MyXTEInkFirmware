@@ -44,11 +44,10 @@ int drawBatteryAndDate(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, const F
   // 背景を描画する場合
   if (drawBackgroundBox) {
     const int padding = 4;
-    // false = 白
-    // 角丸半径は8px程度
-    FrameBufferOps::fillRoundRect(fb, fbWidth, fbHeight,
-                                  currentX - padding, y - padding,
-                                  totalW + padding * 2, totalH + padding * 2, 8, false);
+    // 角丸半径は8px
+    FrameBufferOps::fillRoundRectDither(fb, fbWidth, fbHeight,
+                                        currentX - padding, y - padding,
+                                        totalW + padding * 2, totalH + padding * 2, 8, false);
   }
   
   // 日付
