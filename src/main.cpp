@@ -27,6 +27,7 @@
 #include "core/FileBrowserService.h"
 #include "core/PowerManager.h"
 #include "core/RtcService.h"
+#include "core/MdImageReaderService.h"
 #include "core/SettingsService.h"
 #include "core/TxtReaderService.h"
 #include "gfx/CjkFontImpl.h"
@@ -40,6 +41,7 @@
 #include "screens/HistoryScreen.h"
 #include "screens/HomeScreen.h"
 #include "screens/LiveTextScreen.h"
+#include "screens/MdImageReaderScreen.h"
 #include "screens/SettingsScreen.h"
 #include "screens/StandbyScreen.h"
 #include "screens/TxtReaderScreen.h"
@@ -249,6 +251,7 @@ const Font* activeFont = &font;
 HomeScreen homeScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, battery, rtc, appSettings);
 FolderScreen folderScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, fileBrowser);
 TxtReaderScreen readerScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, appSettings);
+MdImageReaderScreen mdImageReaderScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font);
 SettingsScreen settingsScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, rtc, battery, fileBrowser, appSettings);
 HistoryScreen historyScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font);
 BluetoothScreen bluetoothScreen(LOGICAL_WIDTH, LOGICAL_HEIGHT, font, bleTransfer);
@@ -263,6 +266,7 @@ enum class ActiveScreen {
   kHome,
   kFolder,
   kReader,
+  kMdImageReader,
   kSettings,
   kHistory,
   kBluetooth,
@@ -272,8 +276,8 @@ enum class ActiveScreen {
 };
 ActiveScreen activeScreen = ActiveScreen::kHome;
 // kBluetoothはHome/Settingsのどちらからでも開けるため、BACKで戻る先を覚えておく
-// (trueならHomeから、falseならSettingsから開いた)。
 ActiveScreen bluetoothReturnScreen = ActiveScreen::kHome;
+ActiveScreen liveTextReturnScreen = ActiveScreen::kHome;
 unsigned long lastAutoStandbyActivityMs = 0;
 unsigned long lastStandbyImageActivityMs = 0;
 constexpr unsigned long kStandbyAutoSleepMs = 2UL * 60UL * 1000UL;  // 2分
@@ -286,6 +290,7 @@ Screen& currentScreen() {
   switch (activeScreen) {
     case ActiveScreen::kFolder: return folderScreen;
     case ActiveScreen::kReader: return readerScreen;
+    case ActiveScreen::kMdImageReader: return mdImageReaderScreen;
     case ActiveScreen::kSettings: return settingsScreen;
     case ActiveScreen::kHistory: return historyScreen;
     case ActiveScreen::kBluetooth: return bluetoothScreen;
@@ -295,6 +300,18 @@ Screen& currentScreen() {
     case ActiveScreen::kHome:
     default: return homeScreen;
   }
+}
+
+// pathが.md/.markdownで、対応する画像キャッシュ(PC側コンパニオンツールが
+// 事前レンダリングした"/User/.md_cache/<name>/index.bin")が有効かどうかを
+// 判定する。kOpenFile分岐がこれを見て、MdImageReaderScreen/TxtReaderScreenの
+// どちらを開くか決める(無効ならTxtReaderScreenの生テキスト表示へ自動的に
+// フォールバックする)。
+bool shouldOpenAsMdImage(const String& path) {
+  String lower = path;
+  lower.toLowerCase();
+  if (!lower.endsWith(".md") && !lower.endsWith(".markdown")) return false;
+  return MdImageReaderService::hasValidImageCache(path);
 }
 
 // 設定画面で選ばれたシステムフォント(MiniFont or SD上の.cpfont)を実際に適用する。
@@ -703,24 +720,37 @@ void loop() {
       continue;
     }
 
-    if (b == InputManager::BTN_LEFT && activeScreen == ActiveScreen::kReader &&
-        !readerScreen.isOverlayShown()) {
+    const bool onReaderNoOverlay = activeScreen == ActiveScreen::kReader && !readerScreen.isOverlayShown();
+    const bool onMdImageReaderNoOverlay =
+        activeScreen == ActiveScreen::kMdImageReader && !mdImageReaderScreen.isOverlayShown();
+    if (b == InputManager::BTN_LEFT && (onReaderNoOverlay || onMdImageReaderNoOverlay)) {
       // 読書画面(オーバーレイ非表示時)ではLEFTを「短押し=ブックマーク追加、
       // 長押し=ブックマーク一覧を開く」に割り当てる(TxtReaderScreen.hのクラス
-      // コメント参照)。通常のhandleButton()ディスパッチは経由せず、ここで直接
-      // 呼んで次のボタンへ進む(オーバーレイ表示中はこの分岐に入らないため、
-      // LEFTは下のelse節経由で通常通りhandleButton()に渡り、フォーカス移動等に
-      // 使われる)。UP/DOWNはかつて同じ短押し/長押しの仕組みでCONFIRM/BACKの
-      // ショートカットとして働いていたが、「サイドボタンでの連打が遅い」という
-      // フィードバックを受けて純粋な移動キーに戻したため、この特殊扱いは
-      // LEFTのブックマーク機能にのみ残っている。
+      // コメント参照。MdImageReaderScreenも同じ割り当て)。通常のhandleButton()
+      // ディスパッチは経由せず、ここで直接呼んで次のボタンへ進む(オーバーレイ
+      // 表示中はこの分岐に入らないため、LEFTは下のelse節経由で通常通り
+      // handleButton()に渡り、フォーカス移動等に使われる)。UP/DOWNはかつて同じ
+      // 短押し/長押しの仕組みでCONFIRM/BACKのショートカットとして働いていたが、
+      // 「サイドボタンでの連打が遅い」というフィードバックを受けて純粋な移動キーに
+      // 戻したため、この特殊扱いはLEFTのブックマーク機能にのみ残っている。
       if (!input.wasReleased(b)) continue;
-      if (input.getHeldTime() >= appSettings.longPressMs) {
-        readerScreen.openBookmarkList();
-        if (Serial) Serial.println("[X3FW] bookmark list opened (LEFT long-press)");
+      const bool longPress = input.getHeldTime() >= appSettings.longPressMs;
+      if (onReaderNoOverlay) {
+        if (longPress) {
+          readerScreen.openBookmarkList();
+          if (Serial) Serial.println("[X3FW] bookmark list opened (LEFT long-press)");
+        } else {
+          readerScreen.addBookmark();
+          if (Serial) Serial.println("[X3FW] bookmark added (LEFT short-press)");
+        }
       } else {
-        readerScreen.addBookmark();
-        if (Serial) Serial.println("[X3FW] bookmark added (LEFT short-press)");
+        if (longPress) {
+          mdImageReaderScreen.openBookmarkList();
+          if (Serial) Serial.println("[X3FW] md image bookmark list opened (LEFT long-press)");
+        } else {
+          mdImageReaderScreen.addBookmark();
+          if (Serial) Serial.println("[X3FW] md image bookmark added (LEFT short-press)");
+        }
       }
       safeRenderAndRefresh(EInkDisplay::FAST_REFRESH);
       continue;
@@ -766,6 +796,7 @@ void loop() {
         standbyScreen.onEnter();
       } else if (homeScreen.lastActivatedButton() == HomeScreen::GridButton::kLiveText) {
         activeScreen = ActiveScreen::kLiveText;
+        liveTextReturnScreen = ActiveScreen::kHome;
         // LiveTextは常に単一の固定パス(LiveTextScreen::kDefaultPath、PC側アプリの
         // 保存先と一致)だけを扱う一時ファイルとして割り切った設計にしたため、
         // 「最後に開いたパス」を覚えておく必要はなく、無条件にこのパスを開く。
@@ -794,6 +825,11 @@ void loop() {
         folderSyncScreen.onEnter();
       }
       safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+    } else if (action == ScreenAction::kNavigateForward && activeScreen == ActiveScreen::kBluetooth) {
+      activeScreen = ActiveScreen::kLiveText;
+      liveTextReturnScreen = ActiveScreen::kBluetooth;
+      liveTextScreen.openFile(LiveTextScreen::kDefaultPath);
+      safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
     } else if (action == ScreenAction::kOpenHistory && activeScreen == ActiveScreen::kHome) {
       activeScreen = ActiveScreen::kHistory;
       historyScreen.reload();
@@ -815,7 +851,7 @@ void loop() {
         safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
       } else if (activeScreen == ActiveScreen::kLiveText) {
         liveTextScreen.closeFile();
-        activeScreen = ActiveScreen::kHome;
+        activeScreen = liveTextReturnScreen;
         safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
       } else if (activeScreen == ActiveScreen::kBluetooth || activeScreen == ActiveScreen::kFolderSync) {
         if (activeScreen == ActiveScreen::kBluetooth) bleTransfer.stopAdvertising();
@@ -826,6 +862,16 @@ void loop() {
       } else if (activeScreen == ActiveScreen::kReader) {
         activeScreen = ActiveScreen::kHome;
         // 閉じた本の最新の進捗をホーム画面のプレースホルダーに反映する。
+        String lastBookPath;
+        int lastBookPercent = 0;
+        if (TxtReaderService::readLastBook(lastBookPath, lastBookPercent)) {
+          homeScreen.setLastBook(lastBookPath, lastBookPercent);
+        }
+        safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
+      } else if (activeScreen == ActiveScreen::kMdImageReader) {
+        activeScreen = ActiveScreen::kHome;
+        // MdImageReaderServiceもTxtReaderServiceと同じlast_book.txtを更新するため、
+        // 既存のreadLastBook()がそのまま使える(HomeScreen側の変更は不要)。
         String lastBookPath;
         int lastBookPercent = 0;
         if (TxtReaderService::readLastBook(lastBookPath, lastBookPercent)) {
@@ -843,8 +889,20 @@ void loop() {
         pathToOpen = historyScreen.pendingOpenFilePath();
       }
       if (pathToOpen.length() > 0) {
-        if (readerScreen.openFile(pathToOpen)) {
-          activeScreen = ActiveScreen::kReader;
+        bool opened = false;
+        // .md/.markdownで有効な画像キャッシュ(PC側で事前レンダリング済み)が
+        // あれば画像ページ表示画面を優先する。無い場合、または万一openFile()自体が
+        // 失敗した場合(ページファイル破損等)は、常にTxtReaderScreen(生テキスト
+        // 表示)へフォールバックする。
+        if (shouldOpenAsMdImage(pathToOpen)) {
+          opened = mdImageReaderScreen.openFile(pathToOpen);
+          if (opened) activeScreen = ActiveScreen::kMdImageReader;
+        }
+        if (!opened) {
+          opened = readerScreen.openFile(pathToOpen);
+          if (opened) activeScreen = ActiveScreen::kReader;
+        }
+        if (opened) {
           safeRenderAndRefresh(EInkDisplay::FULL_REFRESH);
         } else {
           // TxtReaderService::open()はヒープ逼迫時にstd::bad_allocを捕まえてfalseを
@@ -942,7 +1000,8 @@ void loop() {
   // 「前のページに戻る」が連続発火しつつ同時にブックマーク長押し判定も進むという
   // 二重の意味になってしまうため、この状態でのLEFTだけ対象から除外する。
   const bool leftReservedForBookmark =
-      activeScreen == ActiveScreen::kReader && !readerScreen.isOverlayShown();
+      (activeScreen == ActiveScreen::kReader && !readerScreen.isOverlayShown()) ||
+      (activeScreen == ActiveScreen::kMdImageReader && !mdImageReaderScreen.isOverlayShown());
 
   if (!recentlyBlocked) {
     uint8_t continuousBtn = 0xFF;

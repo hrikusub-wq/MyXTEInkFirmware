@@ -7,6 +7,7 @@ BluetoothScreen::BluetoothScreen(uint16_t fbWidth, uint16_t fbHeight, const Font
       footer_(Rect{0, static_cast<int>(fbHeight) - kFooterHeight, static_cast<int>(fbWidth), kFooterHeight}) {
   (void)font;
   footerItems_[0] = {PhysicalButton::kBack, "BACK"};
+  footerItems_[1] = {PhysicalButton::kConfirm, "LIVE TEXT"};
   footer_.setItems(footerItems_, 1);
 }
 
@@ -33,10 +34,7 @@ bool BluetoothScreen::pollUpdates() {
     cachedFileName_ = ble_.currentFileName();
     changed = true;
   }
-  if (ble_.receivedBytes() != cachedReceivedBytes_) {
-    cachedReceivedBytes_ = ble_.receivedBytes();
-    changed = true;
-  }
+  // 受信バイト数の変化は意図的に再描画トリガーに含めない(下記render()のコメント参照)。
 
   return changed;
 }
@@ -54,16 +52,13 @@ void BluetoothScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, c
     snprintf(buf, sizeof(buf), "CODE: %s", BleTransferService::errorCodeLabel(ble_.lastError()));
     font.drawText(fb, fbWidth, fbHeight, textX, y, buf);
   } else if (ble_.state() == BleTransferService::State::kReceiving) {
+    // バイト単位の進捗はあえて表示しない: E-inkとSDカードはSPIバスを共有して
+    // いるため、進捗が変わるたびに再描画すると転送そのものが遅くなる
+    // (実機で確認済み)。転送状況はPC側アプリで確認する運用とし、この画面は
+    // ファイル名の表示のみ(受信開始・別ファイルへの切り替わり時にのみ更新)。
     font.drawText(fb, fbWidth, fbHeight, textX, y, "RECEIVING FILE");
     y += lineH + 12;
     font.drawText(fb, fbWidth, fbHeight, textX, y, ble_.currentFileName().c_str());
-    y += lineH + 4;
-    char buf[48];
-    const uint32_t total = ble_.currentFileSize();
-    const int percent = (total > 0) ? static_cast<int>((ble_.receivedBytes() * 100ULL) / total) : 0;
-    snprintf(buf, sizeof(buf), "%lu / %lu BYTES (%d%%)", static_cast<unsigned long>(ble_.receivedBytes()),
-             static_cast<unsigned long>(total), percent);
-    font.drawText(fb, fbWidth, fbHeight, textX, y, buf);
   } else if (ble_.isConnected()) {
     font.drawText(fb, fbWidth, fbHeight, textX, y, "CONNECTED");
     y += lineH + 12;
@@ -76,12 +71,25 @@ void BluetoothScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, c
     font.drawText(fb, fbWidth, fbHeight, textX, y, ble_.deviceName().c_str());
   }
 
+  bool showLiveText = ble_.isConnected() && 
+                      ble_.state() != BleTransferService::State::kReceiving && 
+                      ble_.state() != BleTransferService::State::kError;
+  footer_.setItems(footerItems_, showLiveText ? 2 : 1);
+
   footer_.render(fb, fbWidth, fbHeight, font);
 }
 
 ScreenAction BluetoothScreen::handleButton(uint8_t buttonIndex) {
   if (buttonIndex == InputManager::BTN_BACK) {
     return ScreenAction::kNavigateBack;
+  }
+  if (buttonIndex == InputManager::BTN_CONFIRM) {
+    bool canOpenLiveText = ble_.isConnected() && 
+                           ble_.state() != BleTransferService::State::kReceiving && 
+                           ble_.state() != BleTransferService::State::kError;
+    if (canOpenLiveText) {
+      return ScreenAction::kNavigateForward;
+    }
   }
   return ScreenAction::kNone;
 }

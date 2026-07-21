@@ -42,7 +42,22 @@ void fillRectLightGrayDither(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
 void drawRectOutline(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
                      int x, int y, int w, int h, int thickness = 1);
 
+// 矩形範囲の全画素を白黒反転する(既に描画済みのアイコン・文字ごと反転できる)。
+// 選択中のグリッドボタンを「白抜き」で強調する用途などに使う。
+void invertRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                int x, int y, int w, int h);
+
 // 水平線を1本引く(ステータスバー・フッターの区切り線などに使う)。
 void drawHLine(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int x, int y, int w);
+
+// SD等から読んだ1行分の1bppビットマップ(0=黒/1=白、MSBが左端、行方向バイト詰め、
+// この関数自体は1行分=widthPxピクセルのみを扱う)を、(x, y)を左上として1行だけ
+// 描画する。黒だけでなく白も明示的に描く点がdrawIcon()(gfx/Icon.cpp、PROGMEM上の
+// アイコン用、白は暗黙のフレームバッファ地色に任せている)と異なる: この関数は
+// ページ画像全体を白紙の上に上書きする用途(MdImageReaderService参照)のため、
+// 事前の白クリアを省略できるよう白画素も自分で描く。
+// rowBytesはceil(widthPx/8)バイト以上の長さを持つこと。
+void blitBitmapRow(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                    int x, int y, const uint8_t* rowBytes, int widthPx);
 
 }  // namespace FrameBufferOps

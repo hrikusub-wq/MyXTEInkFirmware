@@ -15,7 +15,6 @@ void FolderSyncScreen::onEnter() {
   syncedCount_ = 0;
   cachedOperationKind_ = OperationKind::kNone;
   cachedFileName_ = "";
-  cachedReceivedBytes_ = 0;
 
   if (!ble_.isConnected()) {
     uiState_ = UiState::kNotConnected;
@@ -54,19 +53,19 @@ bool FolderSyncScreen::pollUpdates() {
     if (ble_.consumeDeletedFile(deletedPath)) {
       cachedOperationKind_ = OperationKind::kDelete;
       cachedFileName_ = deletedPath;
-      cachedReceivedBytes_ = 0;
       syncedCount_++;
       changed = true;
     } else {
-      if (ble_.receivedBytes() != cachedReceivedBytes_ || ble_.currentFileName() != cachedFileName_) {
+      // ファイル名の変化(新しいファイルの転送開始)のみ再描画トリガーにする。
+      // 受信バイト数の変化では再描画しない(FolderSyncScreen.hのコメント参照、
+      // E-ink/SDのSPIバス共有により転送自体が遅くなるため)。
+      if (ble_.currentFileName() != cachedFileName_) {
         cachedOperationKind_ = OperationKind::kTransfer;
-        cachedReceivedBytes_ = ble_.receivedBytes();
         cachedFileName_ = ble_.currentFileName();
         changed = true;
       }
       if (ble_.consumeFileDone()) {
         syncedCount_++;
-        cachedReceivedBytes_ = 0;
         cachedFileName_ = "";
         changed = true;
       }
@@ -111,12 +110,7 @@ void FolderSyncScreen::render(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, 
         font.drawText(fb, fbWidth, fbHeight, textX, y, opLabel);
         y += lineH + 4;
         font.drawText(fb, fbWidth, fbHeight, textX, y, cachedFileName_.c_str());
-        if (cachedOperationKind_ == OperationKind::kTransfer) {
-          y += lineH + 4;
-          char progressBuf[32];
-          snprintf(progressBuf, sizeof(progressBuf), "%lu BYTES", static_cast<unsigned long>(cachedReceivedBytes_));
-          font.drawText(fb, fbWidth, fbHeight, textX, y, progressBuf);
-        }
+        // バイト単位の進捗はあえて表示しない(BluetoothScreen.cppの同種のコメント参照)。
       }
       break;
     }

@@ -157,4 +157,31 @@ void drawHLine(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight, int x, int y, i
   fillRect(fb, fbWidth, fbHeight, x, y, w, 1, true);
 }
 
+void blitBitmapRow(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                    int x, int y, const uint8_t* rowBytes, int widthPx) {
+  for (int col = 0; col < widthPx; col++) {
+    const uint8_t byteVal = rowBytes[col >> 3];
+    const bool isWhite = (byteVal & (0x80 >> (col & 7))) != 0;
+    if (isWhite) {
+      setWhitePixel(fb, fbWidth, fbHeight, x + col, y);
+    } else {
+      setBlackPixel(fb, fbWidth, fbHeight, x + col, y);
+    }
+  }
+}
+
+void invertRect(uint8_t* fb, uint16_t fbWidth, uint16_t fbHeight,
+                int x, int y, int w, int h) {
+  for (int row = 0; row < h; row++) {
+    for (int col = 0; col < w; col++) {
+      const int lx = x + col;
+      const int ly = y + row;
+      if (lx < 0 || ly < 0 || lx >= fbWidth || ly >= fbHeight) continue;
+      int px, py;
+      logicalToPhysical(lx, ly, &px, &py);
+      fb[static_cast<uint32_t>(py) * widthBytesOf(kPhysicalWidth) + (px >> 3)] ^= (0x80 >> (px & 7));
+    }
+  }
+}
+
 }  // namespace FrameBufferOps

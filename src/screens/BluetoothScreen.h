@@ -38,12 +38,14 @@ class BluetoothScreen : public Screen {
 
   BleTransferService& ble_;
 
-  // pollUpdates()での変化検出用キャッシュ。
+  // pollUpdates()での変化検出用キャッシュ。受信バイト数はここで追跡しない
+  // (PC側アプリで進捗を確認する運用のため。E-ink/SDはSPIバスを共有しており
+  // 受信バイト数の変化ごとに再描画すると転送そのものが遅くなるため、あえて
+  // 追跡・表示しない設計にしている)。
   bool cachedConnected_ = false;
   BleTransferService::State cachedState_ = BleTransferService::State::kIdle;
   String cachedFileName_;
-  uint32_t cachedReceivedBytes_ = 0;
 
   FooterGuide footer_;
-  FooterGuideItem footerItems_[1];
+  FooterGuideItem footerItems_[2];
 };

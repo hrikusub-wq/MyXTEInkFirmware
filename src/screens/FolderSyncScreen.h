@@ -50,10 +50,12 @@ class FolderSyncScreen : public Screen {
   int syncedCount_ = 0;
   BleTransferService::ErrorCode lastError_ = BleTransferService::ErrorCode::kNone;
 
-  // pollUpdates()での同期中の進捗変化検出用キャッシュ。
+  // pollUpdates()での同期中の進捗変化検出用キャッシュ。受信バイト数はここで
+  // 追跡しない(BluetoothScreen.hの同種のコメント参照。E-ink/SDのSPIバス共有に
+  // より、バイト単位で再描画すると転送自体が遅くなるため、PC側アプリで進捗を
+  // 見る運用にしている)。
   OperationKind cachedOperationKind_ = OperationKind::kNone;
   String cachedFileName_;
-  uint32_t cachedReceivedBytes_ = 0;
 
   FooterGuide footer_;
   FooterGuideItem footerItems_[1];
